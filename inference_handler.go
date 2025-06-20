@@ -128,29 +128,62 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 		zap.String("target_provider", provider.Name),
 		zap.String("actual_model_for_provider", actualModelName),
 		zap.String("target_upstream_base", provider.APIBaseURL),
+		zap.String("transformation_style", provider.TransformationStyle),
 		zap.String("user_id", userID),      // For logging
 		zap.String("api_key_id", apiKeyID), // For logging
 	)
 
-	if actualModelName != requestPayload.Model {
+	// Prepare request body: transform if style is set, otherwise update model if needed.
+	finalBodyBytes := bodyBytes
+	// modelInBody := actualModelName // Default to resolved model name - Removed as it's not used
+
+	if provider.TransformationStyle != "" {
+		var transformErr error
+		switch provider.TransformationStyle {
+		case "google_ai_style":
+			// For Google, model name is usually in URL, not body.
+			// The transformRequestToGoogleAI expects the original body and doesn't use modelName for body content.
+			finalBodyBytes, transformErr = transformRequestToGoogleAI(bodyBytes, actualModelName, cr.logger)
+		case "anthropic_style":
+			finalBodyBytes, transformErr = transformRequestToAnthropic(bodyBytes, actualModelName, cr.logger)
+		default:
+			cr.logger.Warn("Unknown transformation style, proceeding with original body but updated model name if necessary",
+				zap.String("style", provider.TransformationStyle))
+			// Fall through to default model update logic if style is unknown
+		}
+		if transformErr != nil {
+			cr.logger.Error("Failed to transform request body",
+				zap.Error(transformErr),
+				zap.String("style", provider.TransformationStyle))
+			http.Error(w, fmt.Sprintf("Failed to transform request for provider style %s", provider.TransformationStyle), http.StatusInternalServerError)
+			return transformErr
+		}
+		// If transformation was successful, modelInBody is handled by the transformation function.
+		// For Google, the model is not in the body. For Anthropic, it is.
+		// The key is that `finalBodyBytes` is now the correctly transformed payload.
+	} else if actualModelName != requestPayload.Model {
+		// No transformation style, but model name needs updating in the generic payload
 		var fullPayload map[string]interface{}
 		if err := json.Unmarshal(bodyBytes, &fullPayload); err != nil {
-			cr.logger.Error("Failed to re-parse full JSON request body for modification (POST)", zap.Error(err))
+			cr.logger.Error("Failed to re-parse full JSON request body for model name modification (POST)", zap.Error(err))
 			http.Error(w, "Failed to parse JSON for modification", http.StatusInternalServerError)
 			return err
 		}
-		fullPayload["model"] = actualModelName
+		fullPayload["model"] = actualModelName // Update model name
 		modifiedBodyBytes, errMarshal := json.Marshal(fullPayload)
 		if errMarshal != nil {
-			cr.logger.Error("Failed to marshal modified request body (POST)", zap.Error(errMarshal))
+			cr.logger.Error("Failed to marshal modified request body with new model name (POST)", zap.Error(errMarshal))
 			http.Error(w, "Failed to prepare modified request", http.StatusInternalServerError)
 			return errMarshal
 		}
-		r.Body = io.NopCloser(bytes.NewBuffer(modifiedBodyBytes))
-		r.ContentLength = int64(len(modifiedBodyBytes))
-		r.Header.Set("Content-Type", "application/json")
+		finalBodyBytes = modifiedBodyBytes
 		cr.logger.Info("Modified request body with new model name (POST)", zap.String("new_model", actualModelName))
 	}
+
+	// Set the final body for the proxy
+	r.Body = io.NopCloser(bytes.NewBuffer(finalBodyBytes))
+	r.ContentLength = int64(len(finalBodyBytes))
+	r.Header.Set("Content-Type", "application/json") // Transformations assume JSON output
 
 	if upstreamAPIKey != "" {
 		r.Header.Set("Authorization", "Bearer "+upstreamAPIKey)

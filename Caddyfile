@@ -48,6 +48,7 @@ http://localhost:8080 { # Or your actual domain / port
                 # Add other providers as needed, e.g.:
                 # provider anthropic {
                 #   api_base_url "https://api.anthropic.com/v1"
+                #   transformation_style "anthropic" # Optional: specify transformation style if needed
                 # }
 
                 # Define default providers for specific models

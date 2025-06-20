@@ -59,10 +59,11 @@ type AICoreRouter struct {
 
 // ProviderConfig holds configuration for an AI provider.
 type ProviderConfig struct {
-	Name       string `json:"-"`
-	APIBaseURL string `json:"api_base_url,omitempty"`
-	proxy      *httputil.ReverseProxy
-	parsedURL  *url.URL
+	Name                string `json:"-"`
+	APIBaseURL          string `json:"api_base_url,omitempty"`
+	TransformationStyle string `json:"transformation_style,omitempty"` // New field for transformation style
+	proxy               *httputil.ReverseProxy
+	parsedURL           *url.URL
 }
 
 // CaddyModule returns the Caddy module information.
@@ -108,6 +109,38 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 				req.Header.Del("X-Forwarded-Proto")
 			},
 			ModifyResponse: func(resp *http.Response) error {
+				// Check if a transformation style is set for this provider
+				providerConfig, ok := cr.Providers[p.Name] // p.Name should be the key
+				if !ok || providerConfig.TransformationStyle == "" {
+					return nil // No transformation needed
+				}
+
+				cr.logger.Debug("Attempting to apply response transformation",
+					zap.String("provider", p.Name),
+					zap.String("style", providerConfig.TransformationStyle))
+
+				transformedBody, err := transformResponse(resp.Body, providerConfig.TransformationStyle, cr.logger)
+				if err != nil {
+					cr.logger.Error("Failed to transform response body",
+						zap.Error(err),
+						zap.String("provider", p.Name),
+						zap.String("style", providerConfig.TransformationStyle))
+					// Decide how to handle: return original response, or an error response?
+					// For now, let's log and pass through the original response if transformation fails.
+					// To signal an error to the client, you'd modify the response status code here.
+					// resp.StatusCode = http.StatusInternalServerError
+					// resp.Body = io.NopCloser(strings.NewReader("failed to transform response"))
+					// resp.Header.Set("Content-Type", "text/plain")
+					return nil // Or return err to potentially stop further processing if critical
+				}
+
+				resp.Body = transformedBody
+				// Content-Length will likely change, so remove it.
+				// The http server will set it correctly based on the new body.
+				resp.Header.Del("Content-Length")
+				cr.logger.Info("Successfully transformed response body",
+					zap.String("provider", p.Name),
+					zap.String("style", providerConfig.TransformationStyle))
 				return nil
 			},
 			ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
@@ -247,6 +280,11 @@ func (cr *AICoreRouter) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 							return d.ArgErr()
 						}
 						p.APIBaseURL = d.Val()
+					case "transformation_style": // New Caddyfile directive
+						if !d.NextArg() {
+							return d.ArgErr()
+						}
+						p.TransformationStyle = strings.ToLower(d.Val())
 					default:
 						return d.Errf("unrecognized provider option '%s' for provider '%s'", d.Val(), providerName)
 					}
