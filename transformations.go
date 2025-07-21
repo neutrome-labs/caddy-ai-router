@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -139,7 +141,75 @@ type AnthropicUsage struct {
 
 // --- Request Transformation Functions ---
 
-func transformRequestToGoogleAI(originalBody []byte, modelName string, logger *zap.Logger) ([]byte, error) {
+func transformModelRequest(style string, r *http.Request, logger *zap.Logger) error {
+	switch style {
+	case "genai":
+		// For /models, we only need to adjust headers/query params, not the body.
+		apiKey := r.Header.Get("Authorization")
+		if strings.HasPrefix(apiKey, "Bearer ") {
+			apiKey = strings.TrimPrefix(apiKey, "Bearer ")
+		}
+		if apiKey != "" {
+			q := r.URL.Query()
+			q.Set("key", apiKey)
+			r.URL.RawQuery = q.Encode()
+			r.Header.Del("Authorization")
+			logger.Debug("Moved API key to query param for Google AI /models request")
+		}
+	// Add other cases for different styles if they need /models request transformation.
+	default:
+		logger.Debug("No special /models transformation needed for style", zap.String("style", style))
+	}
+	return nil
+}
+
+func transformRequest(style string, r *http.Request, modelName string, logger *zap.Logger) error {
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		logger.Error("Failed to read request body for transformation", zap.Error(err))
+		return fmt.Errorf("reading request body for transformation: %w", err)
+	}
+	r.Body.Close() // Close original body
+
+	var finalBodyBytes []byte
+	var transformErr error
+
+	switch style {
+	case "genai":
+		finalBodyBytes, transformErr = transformRequestToGoogleAI(r, bodyBytes, modelName, logger)
+	case "anthropic":
+		finalBodyBytes, transformErr = transformRequestToAnthropic(r, bodyBytes, modelName, logger)
+	default:
+		logger.Warn("Unknown transformation style, proceeding with original body", zap.String("style", style))
+		finalBodyBytes = bodyBytes // Passthrough
+	}
+
+	if transformErr != nil {
+		return transformErr // The error is already logged by the specific function
+	}
+
+	// Set the final transformed body
+	r.Body = io.NopCloser(bytes.NewBuffer(finalBodyBytes))
+	r.ContentLength = int64(len(finalBodyBytes))
+	r.Header.Set("Content-Type", "application/json") // Transformations assume JSON output
+
+	return nil
+}
+
+func transformRequestToGoogleAI(r *http.Request, originalBody []byte, modelName string, logger *zap.Logger) ([]byte, error) {
+	// Move API key from header to query param
+	apiKey := r.Header.Get("Authorization")
+	if strings.HasPrefix(apiKey, "Bearer ") {
+		apiKey = strings.TrimPrefix(apiKey, "Bearer ")
+	}
+	if apiKey != "" {
+		q := r.URL.Query()
+		q.Set("key", apiKey)
+		r.URL.RawQuery = q.Encode()
+		r.Header.Del("Authorization") // Remove original auth header
+		logger.Debug("Moved API key from Authorization header to 'key' query parameter for Google AI")
+	}
+
 	var unifiedReq UnifiedChatRequest
 	if err := json.Unmarshal(originalBody, &unifiedReq); err != nil {
 		logger.Error("Failed to unmarshal original request for Google AI transformation", zap.Error(err), zap.ByteString("body", originalBody))
@@ -183,7 +253,7 @@ func transformRequestToGoogleAI(originalBody []byte, modelName string, logger *z
 	return transformedBody, nil
 }
 
-func transformRequestToAnthropic(originalBody []byte, modelName string, logger *zap.Logger) ([]byte, error) {
+func transformRequestToAnthropic(r *http.Request, originalBody []byte, modelName string, logger *zap.Logger) ([]byte, error) {
 	var unifiedReq UnifiedChatRequest
 	if err := json.Unmarshal(originalBody, &unifiedReq); err != nil {
 		logger.Error("Failed to unmarshal original request for Anthropic transformation", zap.Error(err), zap.ByteString("body", originalBody))
@@ -249,7 +319,7 @@ func transformResponse(respBody io.ReadCloser, style string, logger *zap.Logger)
 	var transformedBytes []byte = bodyBytes // Default to passthrough
 
 	switch style {
-	case "google_ai_style":
+	case "genai":
 		logger.Debug("Attempting to transform response from Google AI style (currently passthrough)")
 		// Placeholder: Convert GoogleAIGenerateContentResponse to UnifiedChatResponse
 		// var googleResp GoogleAIGenerateContentResponse
@@ -258,7 +328,7 @@ func transformResponse(respBody io.ReadCloser, style string, logger *zap.Logger)
 		// transformedBytes, err = json.Marshal(unifiedResp)
 		// if err != nil { ... }
 		transformedBytes = bodyBytes // Actual transformation logic needed here
-	case "anthropic_style":
+	case "anthropic":
 		logger.Debug("Attempting to transform response from Anthropic style (currently passthrough)")
 		// Placeholder: Convert AnthropicMessagesResponse to UnifiedChatResponse
 		// var anthropicResp AnthropicMessagesResponse

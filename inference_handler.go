@@ -9,10 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	// "time" // No longer needed here as transaction timing is moved
-
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp" // Still needed for 'next' if we keep it
-	// ai_helpers "github.com/neutrome-labs/caddy-ai-router-helpers" // Import removed
 	"go.uber.org/zap"
 )
 
@@ -135,17 +132,14 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 
 	// Prepare request body: transform if style is set, otherwise update model if needed.
 	finalBodyBytes := bodyBytes
-	// modelInBody := actualModelName // Default to resolved model name - Removed as it's not used
 
 	if provider.TransformationStyle != "" {
 		var transformErr error
 		switch provider.TransformationStyle {
 		case "google_ai_style":
-			// For Google, model name is usually in URL, not body.
-			// The transformRequestToGoogleAI expects the original body and doesn't use modelName for body content.
-			finalBodyBytes, transformErr = transformRequestToGoogleAI(bodyBytes, actualModelName, cr.logger)
+			finalBodyBytes, transformErr = transformRequestToGoogleAI(r, bodyBytes, actualModelName, cr.logger)
 		case "anthropic_style":
-			finalBodyBytes, transformErr = transformRequestToAnthropic(bodyBytes, actualModelName, cr.logger)
+			finalBodyBytes, transformErr = transformRequestToAnthropic(r, bodyBytes, actualModelName, cr.logger)
 		default:
 			cr.logger.Warn("Unknown transformation style, proceeding with original body but updated model name if necessary",
 				zap.String("style", provider.TransformationStyle))
@@ -192,5 +186,5 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 
 	provider.proxy.ServeHTTP(w, r) // Directly proxy the request
 
-	return nil // Errors handled by proxy or earlier checks
+	return next.ServeHTTP(w, r) // Call next handler in chain if any
 }
