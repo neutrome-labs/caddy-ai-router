@@ -43,7 +43,6 @@ This project implements an AI gateway using Caddy with a custom Go module. It ro
         -   Define providers (e.g., `openai`, `openrouter`) with their `api_base_url`.
         -   Set `default_provider_for_model` mappings.
         -   Set the `super_default_provider`.
-        -   Set the `upstream_path` (e.g., `/chat/completions`).
 
     Example middleware chain in `Caddyfile`:
     ```caddyfile
@@ -59,7 +58,6 @@ This project implements an AI gateway using Caddy with a custom Go module. It ro
 
                 default_provider_for_model "gpt-4o" "openai"
                 super_default_provider "openrouter"
-                upstream_path "/chat/completions"
             }
     # ... } } }
     ```
@@ -127,6 +125,6 @@ curl -X POST http://localhost:8080/api/chat/completions \
 -d '{
     "model": "openai#gpt-4o",
     "messages": [{"role": "user", "content": "Explain quantum computing simply."}],
-    "stream": false # Example, add other parameters as needed by the provider
+    "stream": true
 }'
 ```

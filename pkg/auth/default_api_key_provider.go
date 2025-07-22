@@ -1,4 +1,4 @@
-package ai_router
+package auth
 
 import (
 	"fmt"

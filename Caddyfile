@@ -1,84 +1,54 @@
-# Caddyfile for caddy-ai-gateway
-
-{
-    # Global options
-    # admin off # Uncomment to disable admin API, or configure securely
-    # http_port 8080 # Default HTTP port Caddy listens on if not using :80
-    # https_port 8443 # Default HTTPS port Caddy listens on if not using :443
-    # acme_dns your_dns_provider # For automatic HTTPS with ACME DNS challenge
-    # email your-email@example.com # For ACME registration
-}
-
-# This assumes Caddy is run with a command like:
-# ./caddy run --config Caddyfile --adapter caddyfile
-# And that the custom 'ai_router' module is compiled in.
-
-# Define the main server block.
-# Replace example.com with your domain or use a port like :8080 for local testing.
-# If using a domain, Caddy will attempt to get an HTTPS certificate automatically.
-# For local testing, :8080 is simpler.
-http://localhost:8080 { # Or your actual domain / port
-
-    # Enable logging
+http://localhost:8080 {
     log {
         output stdout
-        level DEBUG # Can be DEBUG for more verbose output from Caddy and modules
+        level DEBUG
     }
 
-    # Route requests under /managed-inference/* to the new AI middleware chain
     handle_path /api/* {
         route {
             # CORS Headers to allow all origins, methods, and common headers
             header Access-Control-Allow-Origin "*"
             header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
             header Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With, X-CSRF-Token, *" # Added * for broader compatibility
+            
             # Handle OPTIONS preflight requests
             @options method OPTIONS
             respond @options 204
 
             # AI Core Router: Handles routing to AI providers
             ai_core_router {
-                # Define known providers and their API base URLs
                 provider openrouter {
                     api_base_url "https://openrouter.ai/api/v1"
                 }
-                provider openai {
-                    api_base_url "https://api.openai.com/v1"
+
+                # Define known providers and their API base URLs
+                provider google {
+                    api_base_url "https://generativelanguage.googleapis.com/v1beta"
+                    style "google" # Specify the style for Google provider
                 }
-                # Add other providers as needed, e.g.:
-                # provider anthropic {
-                #   api_base_url "https://api.anthropic.com/v1"
-                #   transformation_style "anthropic" # Optional: specify transformation style if needed
-                # }
+                
+                provider anthropic {
+                    api_base_url "https://api.anthropic.com/v1"
+                    style "anthropic" # Specify the style for Anthropic provider
+                }
 
                 # Define default providers for specific models
-                default_provider_for_model "gpt-4" "openai"
-                default_provider_for_model "gpt-4-turbo" "openai"
-                default_provider_for_model "gpt-3.5-turbo" "openai"
-                # default_provider_for_model "claude-3-opus-20240229" "anthropic" # Example
+                default_provider_for_model "gemini-pro" "google"
+                default_provider_for_model "claude-3-opus-20240229" "anthropic"
 
                 # Define the super-default provider
                 super_default_provider "openrouter"
-
-                # Define the upstream path for chat completions
-                # This is appended to the provider's base URL for /chat/completions requests
-                # The /models endpoint is handled internally by ai_core_router.
-                upstream_path "/chat/completions"
-
-                # pocketbase_provider_target directive is removed.
-                # Upstream API keys are fetched using the provider's name (e.g., "openrouter", "openai")
-                # as the target collection in PocketBase, if PocketBaseService is available from ai_keys.
             }
         }
     }
 
-    # Optional: A health check endpoint
+    # Health check endpoint
     handle_path /health {
         respond "OK" 200
     }
 
-    # Default handler for any other paths not matched above
+    # Default handler
     handle {
-        respond "Resource not found." 404
+        respond "Not found" 404
     }
 }

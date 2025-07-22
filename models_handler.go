@@ -1,13 +1,12 @@
-package ai_router
+package server
 
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"sync"
 
+	"github.com/neutrome-labs/caddy-ai-router/pkg/auth"
 	"go.uber.org/zap"
 )
 
@@ -73,8 +72,7 @@ type providerModelResult struct {
 }
 
 // handleGetManagedModels handles GET requests to /models.
-// apiKeyService is passed from AICoreRouter.ServeHTTP and can be nil.
-func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Request, apiKeyService ExternalAPIKeyProvider) error {
+func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Request, apiKeyService auth.ExternalAPIKeyProvider) error {
 	cr.mu.RLock()
 	providerConfigs := make([]*ProviderConfig, 0, len(cr.Providers))
 	for _, pCfg := range cr.Providers {
@@ -83,7 +81,6 @@ func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Re
 	cr.mu.RUnlock()
 
 	if len(providerConfigs) == 0 {
-		cr.logger.Info("No providers configured for /models endpoint.")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(AggregatedModelsResponse{Data: []ModelInfo{}})
@@ -98,66 +95,41 @@ func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Re
 		go func(providerConfig *ProviderConfig) {
 			defer wg.Done()
 			var apiKey string
-			// var keyErr error // keyErr is declared inside the if block now
-
 			if apiKeyService != nil {
-				pbTarget := strings.ToLower(providerConfig.Name) // pbTarget is a bit of a misnomer now, should be targetIdentifier
-				cr.logger.Debug("Attempting to fetch API key for /models endpoint via ExternalAPIKeyProvider",
-					zap.String("provider", providerConfig.Name),
-					zap.String("target_identifier", pbTarget))
-
-				// Use empty string for userID to fetch a general/default key for the target
-				fetchedKey, keyErr := apiKeyService.GetExternalAPIKey(pbTarget, "") // Use generic service and method
-				if keyErr != nil {
-					cr.logger.Warn("Failed to get API key for provider's /models endpoint via ExternalAPIKeyProvider, proceeding without auth",
-						zap.String("provider", providerConfig.Name),
-						zap.String("target_identifier", pbTarget),
-						zap.Error(keyErr))
-					// Continue without API key; some /models endpoints might be public.
-				} else if fetchedKey != "" {
-					apiKey = fetchedKey
-					cr.logger.Info("Successfully fetched API key for provider's /models endpoint via ExternalAPIKeyProvider",
-						zap.String("provider", providerConfig.Name),
-						zap.String("target_identifier", pbTarget))
+				fetchedKey, err := apiKeyService.GetExternalAPIKey(providerConfig.Name, "")
+				if err != nil {
+					cr.logger.Warn("Failed to get API key for provider", zap.String("provider", providerConfig.Name), zap.Error(err))
 				} else {
-					cr.logger.Info("No API key returned from ExternalAPIKeyProvider for /models endpoint (key might be optional or not found)",
-						zap.String("provider", providerConfig.Name),
-						zap.String("target_identifier", pbTarget))
+					apiKey = fetchedKey
 				}
-			} else {
-				cr.logger.Info("ExternalAPIKeyProvider not available for /models, proceeding without attempting API key fetch.", zap.String("provider", providerConfig.Name))
 			}
 
-			modelsURL := strings.TrimRight(providerConfig.APIBaseURL, "/") + "/models"
-			req, err := http.NewRequest(http.MethodGet, modelsURL, nil)
+			if providerConfig.Provider == nil {
+				resultsChan <- providerModelResult{providerName: providerConfig.Name, err: fmt.Errorf("provider not initialized")}
+				return
+			}
+
+			models, err := providerConfig.Provider.FetchModels(providerConfig.APIBaseURL, apiKey, cr.httpClient, cr.logger)
 			if err != nil {
-				resultsChan <- providerModelResult{providerName: providerConfig.Name, err: fmt.Errorf("failed to create request for %s: %w", modelsURL, err)}
-				return
-			}
-			req.Header.Set("User-Agent", "Caddy-AI-Gateway/ManagedModels")
-			if apiKey != "" {
-				req.Header.Set("Authorization", "Bearer "+apiKey)
-			}
-
-			resp, err := cr.httpClient.Do(req) // Use cr.httpClient
-			if err != nil {
-				resultsChan <- providerModelResult{providerName: providerConfig.Name, err: fmt.Errorf("request to %s failed: %w", modelsURL, err)}
-				return
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				bodyBytes, _ := io.ReadAll(resp.Body)
-				resultsChan <- providerModelResult{providerName: providerConfig.Name, err: fmt.Errorf("request to %s returned status %d: %s", modelsURL, resp.StatusCode, string(bodyBytes))}
+				resultsChan <- providerModelResult{providerName: providerConfig.Name, err: err}
 				return
 			}
 
-			var providerResp ProviderModelsResponse
-			if err := json.NewDecoder(resp.Body).Decode(&providerResp); err != nil {
-				resultsChan <- providerModelResult{providerName: providerConfig.Name, err: fmt.Errorf("failed to decode response from %s: %w", modelsURL, err)}
-				return
+			var modelInfos []ModelInfo
+			for _, model := range models {
+				modelMap, ok := model.(map[string]interface{})
+				if !ok {
+					cr.logger.Warn("Failed to assert model to map[string]interface{}", zap.String("provider", providerConfig.Name))
+					continue
+				}
+				modelInfo := ModelInfo{
+					ID:   modelMap["id"].(string),
+					Name: modelMap["id"].(string),
+				}
+				modelInfos = append(modelInfos, modelInfo)
 			}
-			resultsChan <- providerModelResult{providerName: providerConfig.Name, models: providerResp.Data}
+
+			resultsChan <- providerModelResult{providerName: providerConfig.Name, models: modelInfos}
 		}(pCfg)
 	}
 
@@ -169,10 +141,7 @@ func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Re
 
 	for result := range resultsChan {
 		if result.err != nil {
-			cr.logger.Error("Failed to fetch models from provider", // Use cr.logger
-				zap.String("provider", result.providerName),
-				zap.Error(result.err),
-			)
+			cr.logger.Error("Failed to fetch models from provider", zap.String("provider", result.providerName), zap.Error(result.err))
 			continue
 		}
 		for _, model := range result.models {
@@ -183,14 +152,8 @@ func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	cr.logger.Info("Aggregated models from providers", zap.Int("total_unique_models", len(allModels))) // Use cr.logger
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(AggregatedModelsResponse{Data: allModels}); err != nil {
-		cr.logger.Error("Failed to encode aggregated models response", zap.Error(err)) // Use cr.logger
-		// Hard to send an error to client at this point if headers already sent
-		return err
-	}
+	json.NewEncoder(w).Encode(AggregatedModelsResponse{Data: allModels})
 	return nil
 }

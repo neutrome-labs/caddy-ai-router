@@ -1,0 +1,60 @@
+# Caddyfile for caddy-ai-gateway (Production)
+
+{
+    # Global options
+    # Replace with your domain's email for ACME registration
+    email your-email@example.com
+}
+
+# Replace example.com with your actual domain.
+# Caddy will automatically provision an HTTPS certificate for it.
+example.com {
+
+    # Enable production logging
+    log {
+        output file /var/log/caddy/ai_router.log {
+            roll_size 10mb
+            roll_keep 5
+            roll_keep_for 720h
+        }
+        level INFO
+    }
+
+    # Route requests under /v1/* to the AI router
+    handle_path /v1/* {
+        route {
+            # CORS Headers for production
+            header Access-Control-Allow-Origin "https://your-frontend-app.com"
+            header Access-Control-Allow-Methods "GET, POST, OPTIONS"
+            header Access-Control-Allow-Headers "Authorization, Content-Type"
+            
+            @options method OPTIONS
+            respond @options 204
+
+            # AI Core Router
+            ai_core_router {
+                provider google {
+                    api_base_url "https://generativelanguage.googleapis.com/v1beta"
+                }
+                provider anthropic {
+                    api_base_url "https://api.anthropic.com/v1"
+                }
+
+                default_provider_for_model "gemini-pro" "google"
+                default_provider_for_model "claude-3-opus-20240229" "anthropic"
+
+                super_default_provider "google"
+            }
+        }
+    }
+
+    # Health check endpoint
+    handle_path /health {
+        respond "OK" 200
+    }
+
+    # Default handler
+    handle {
+        respond "Not found" 404
+    }
+}

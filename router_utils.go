@@ -1,4 +1,4 @@
-package ai_router
+package server
 
 import (
 	"strings"
@@ -52,9 +52,9 @@ func (cr *AICoreRouter) resolveProviderAndModel(requestedModel string) (provider
 	return "", requestedModel // Return empty provider name, model name as is
 }
 
-// singleJoiningSlash is a helper from net/http/httputil to join URL paths.
+// SingleJoiningSlash is a helper from net/http/httputil to join URL paths.
 // It ensures that there's exactly one slash between a and b.
-func singleJoiningSlash(a, b string) string {
+func SingleJoiningSlash(a, b string) string {
 	aslash := strings.HasSuffix(a, "/")
 	bslash := strings.HasPrefix(b, "/")
 	switch {
