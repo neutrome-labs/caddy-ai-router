@@ -122,9 +122,26 @@ func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Re
 					cr.logger.Warn("Failed to assert model to map[string]interface{}", zap.String("provider", providerConfig.Name))
 					continue
 				}
+
+				var id string
+				var name string
+				if modelID, ok := modelMap["id"].(string); ok {
+					id = modelID
+				} else {
+					cr.logger.Warn("Model ID is not a string", zap.Any("model", modelMap), zap.String("provider", providerConfig.Name))
+					continue
+				}
+
+				if modelName, ok := modelMap["name"].(string); ok {
+					name = modelName
+				} else {
+					cr.logger.Warn("Model name is not a string", zap.Any("model", modelMap), zap.String("provider", providerConfig.Name))
+					name = id // Fallback to ID if name is not available
+				}
+
 				modelInfo := ModelInfo{
-					ID:   modelMap["id"].(string),
-					Name: modelMap["id"].(string),
+					ID:   id,
+					Name: name,
 				}
 				modelInfos = append(modelInfos, modelInfo)
 			}

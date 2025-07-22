@@ -9,7 +9,7 @@ http://localhost:8080 {
             # CORS Headers to allow all origins, methods, and common headers
             header Access-Control-Allow-Origin "*"
             header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
-            header Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With, X-CSRF-Token, *" # Added * for broader compatibility
+            header Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With, X-CSRF-Token, *"
             
             # Handle OPTIONS preflight requests
             @options method OPTIONS
@@ -17,11 +17,11 @@ http://localhost:8080 {
 
             # AI Core Router: Handles routing to AI providers
             ai_core_router {
+                # Define known providers and their API base URLs
                 provider openrouter {
                     api_base_url "https://openrouter.ai/api/v1"
                 }
 
-                # Define known providers and their API base URLs
                 provider google {
                     api_base_url "https://generativelanguage.googleapis.com/v1beta"
                     style "google" # Specify the style for Google provider
@@ -29,7 +29,12 @@ http://localhost:8080 {
                 
                 provider anthropic {
                     api_base_url "https://api.anthropic.com/v1"
-                    style "anthropic" # Specify the style for Anthropic provider
+                    style "anthropic"
+                }
+
+                provider cf {
+                    api_base_url "https://api.cloudflare.com/client/v4/accounts/{YOUR_ACCOUNT_ID}/ai"
+                    style "cloudflare"
                 }
 
                 # Define default providers for specific models

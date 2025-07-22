@@ -86,6 +86,8 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 			p.Provider = &providers.GoogleProvider{}
 		case "anthropic":
 			p.Provider = &providers.AnthropicProvider{}
+		case "cloudflare":
+			p.Provider = &providers.CloudflareProvider{}
 		default:
 			p.Provider = &providers.OpenAIProvider{}
 		}
