@@ -59,12 +59,16 @@ func (AICoreRouter) CaddyModule() caddy.ModuleInfo {
 }
 
 func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
-	common.TryInstrumentAppObservability()
-
 	cr.logger = ctx.Logger(cr)
 	cr.httpClient = &http.Client{Timeout: 15 * time.Second}
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
+
+	if common.TryInstrumentAppObservability() {
+		cr.logger.Info("PostHog observability instrumentation enabled")
+	} else {
+		cr.logger.Warn("Failed to initialize PostHog observability instrumentation, skipping")
+	}
 
 	if cr.Providers == nil {
 		cr.Providers = make(map[string]*ProviderConfig)

@@ -8,12 +8,13 @@ import (
 
 var posthogClient posthog.Client
 
-func TryInstrumentAppObservability() {
-	var err error
-	posthogClient, err = posthog.NewWithConfig(os.Getenv("POSTHOG_API_KEY"), posthog.Config{Endpoint: os.Getenv("POSTHOG_BASE_URL")})
+func TryInstrumentAppObservability() bool {
+	client, err := posthog.NewWithConfig(os.Getenv("POSTHOG_API_KEY"), posthog.Config{Endpoint: os.Getenv("POSTHOG_BASE_URL")})
 	if err != nil {
-		return // If we can't create the client, we just skip instrumentation
+		return false // If we can't create the client, we just skip instrumentation
 	}
+	posthogClient = client
+	return true
 
 	// defer client.Close()
 }
