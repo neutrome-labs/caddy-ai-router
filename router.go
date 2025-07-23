@@ -188,6 +188,13 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 		zap.String("super_default_provider", cr.SuperDefaultProvider),
 		zap.Int("num_model_defaults", len(cr.DefaultProviderForModel)),
 	)
+
+	common.FireObservabilityEvent("system", "router-start", map[string]interface{}{
+		"num_providers":          len(cr.Providers),
+		"super_default_provider": cr.SuperDefaultProvider,
+		"num_model_defaults":     len(cr.DefaultProviderForModel),
+	})
+
 	return nil
 }
 
