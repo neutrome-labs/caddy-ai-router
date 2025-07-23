@@ -14,7 +14,7 @@
             "args": [
                 "run",
                 "--config",
-                "Caddyfile"
+                "Caddyfile.local"
             ],
             "envFile": "${workspaceFolder}/.env"
         }
