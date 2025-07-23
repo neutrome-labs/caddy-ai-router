@@ -14,6 +14,7 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/neutrome-labs/caddy-ai-router/pkg/auth"
+	"github.com/neutrome-labs/caddy-ai-router/pkg/common"
 	"github.com/neutrome-labs/caddy-ai-router/pkg/providers"
 	"go.uber.org/zap"
 )
@@ -58,6 +59,8 @@ func (AICoreRouter) CaddyModule() caddy.ModuleInfo {
 }
 
 func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
+	common.TryInstrumentAppObservability()
+
 	cr.logger = ctx.Logger(cr)
 	cr.httpClient = &http.Client{Timeout: 15 * time.Second}
 	cr.mu.Lock()
@@ -71,6 +74,7 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 	}
 
 	for name, p := range cr.Providers {
+		p := p // Capture range variable
 		p.Name = name
 		if p.APIBaseURL == "" {
 			return fmt.Errorf("provider %s: api_base_url is required", name)
@@ -113,6 +117,20 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 					zap.String("target_url", req.URL.String()),
 					zap.String("model", modelName),
 				)
+
+				reqCtx := req.Context()
+
+				userIDVal := reqCtx.Value(UserIDContextKeyString)
+				apiKeyIDVal := reqCtx.Value(ApiKeyIDContextKeyString)
+				userID, _ := userIDVal.(string)
+				apiKeyID, _ := apiKeyIDVal.(string)
+
+				common.FireObservabilityEvent(userID, "inference-proxy-start", map[string]interface{}{
+					"provider":     req.Context().Value(ProviderNameContextKeyString).(string),
+					"target_model": req.Context().Value(ActualModelNameContextKeyString).(string),
+					"user_id":      userID,
+					"api_key_id":   apiKeyID,
+				})
 			},
 			ModifyResponse: func(resp *http.Response) error {
 				if p.Provider != nil {
@@ -128,6 +146,22 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 					zap.String("target_url", req.URL.String()),
 					zap.Error(err),
 				)
+
+				reqCtx := req.Context()
+
+				userIDVal := reqCtx.Value(UserIDContextKeyString)
+				apiKeyIDVal := reqCtx.Value(ApiKeyIDContextKeyString)
+				userID, _ := userIDVal.(string)
+				apiKeyID, _ := apiKeyIDVal.(string)
+
+				common.FireObservabilityEvent(userID, "inference-proxy-error", map[string]interface{}{
+					"error":        err.Error(),
+					"provider":     req.Context().Value(ProviderNameContextKeyString).(string),
+					"target_model": req.Context().Value(ActualModelNameContextKeyString).(string),
+					"user_id":      userID,
+					"api_key_id":   apiKeyID,
+				})
+
 				http.Error(rw, fmt.Sprintf("Error proxying to upstream provider %s: %v", p.Name, err), http.StatusBadGateway)
 			},
 		}

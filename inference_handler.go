@@ -11,6 +11,7 @@ import (
 
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp" // Still needed for 'next' if we keep it
 	"github.com/neutrome-labs/caddy-ai-router/pkg/auth"
+	"github.com/neutrome-labs/caddy-ai-router/pkg/common"
 	"go.uber.org/zap"
 )
 
@@ -95,6 +96,22 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 		zap.String("user_id", userID),
 		zap.String("api_key_id", apiKeyID),
 	)
+
+	common.FireObservabilityEvent(userID, "inference-start", map[string]interface{}{
+		"model":      requestPayload.Model,
+		"user_id":    userID,
+		"api_key_id": apiKeyID,
+	})
+
+	start_time := common.CaddyClock.Now()
+	defer func() {
+		common.FireObservabilityEvent(userID, "inference-stop", map[string]interface{}{
+			"model":       requestPayload.Model,
+			"duration_ms": common.CaddyClock.Now().Sub(start_time).Milliseconds(),
+			"user_id":     userID,
+			"api_key_id":  apiKeyID,
+		})
+	}()
 
 	providerConfig.proxy.ServeHTTP(w, r)
 
