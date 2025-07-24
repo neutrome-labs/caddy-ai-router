@@ -165,8 +165,8 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 
 func getModelID(model interface{}) string {
 	if m, ok := model.(map[string]interface{}); ok {
-		if name, ok := m["name"].(string); ok {
-			return name
+		if id, ok := m["id"].(string); ok {
+			return id
 		}
 	}
 	return ""

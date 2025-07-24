@@ -70,5 +70,18 @@ func (p *CloudflareProvider) FetchModels(baseURL string, apiKey string, httpClie
 	if err := json.NewDecoder(resp.Body).Decode(&providerResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response from %s: %w", modelsURL, err)
 	}
-	return providerResp.Result, nil
+
+	var models []interface{}
+	for _, model := range providerResp.Result {
+		if m, ok := model.(map[string]interface{}); ok {
+			if name, ok := m["name"].(string); ok {
+				models = append(models, map[string]interface{}{
+					"id":   name,
+					"name": name,
+				})
+			}
+		}
+	}
+
+	return models, nil
 }
