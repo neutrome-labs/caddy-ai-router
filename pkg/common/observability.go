@@ -9,7 +9,12 @@ import (
 var posthogClient posthog.Client
 
 func TryInstrumentAppObservability() bool {
-	client, err := posthog.NewWithConfig(os.Getenv("POSTHOG_API_KEY"), posthog.Config{Endpoint: os.Getenv("POSTHOG_BASE_URL")})
+	key := os.Getenv("POSTHOG_API_KEY")
+	if key == "" {
+		return false // If no API key is set, we skip instrumentation
+	}
+
+	client, err := posthog.NewWithConfig(key, posthog.Config{Endpoint: os.Getenv("POSTHOG_BASE_URL")})
 	if err != nil {
 		return false // If we can't create the client, we just skip instrumentation
 	}

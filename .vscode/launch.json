@@ -9,7 +9,7 @@
             "type": "go",
             "request": "launch",
             "mode": "exec",
-            "program": "${workspaceFolder}/dist/caddy-ai-gateway",
+            "program": "${workspaceFolder}/caddy",
             "cwd": "${workspaceFolder}",
             "args": [
                 "run",

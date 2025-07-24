@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/neutrome-labs/caddy-ai-router/pkg/common"
+	"github.com/neutrome-labs/caddy-ai-router/pkg/transforms"
 	"go.uber.org/zap"
 )
 
@@ -21,6 +23,16 @@ func (p *CloudflareProvider) Name() string {
 // ModifyCompletionRequest sets the URL path for the completion request.
 func (p *CloudflareProvider) ModifyCompletionRequest(r *http.Request, modelName string, logger *zap.Logger) error {
 	r.URL.Path = strings.TrimRight(r.URL.Path, "/") + "/run/" + modelName
+
+	common.HookHttpRequestBody(r, func(r *http.Request, body []byte) ([]byte, error) {
+		transformedBody, err := transforms.TransformRequestToCloudflareAI(r, body, modelName, logger)
+		if err != nil {
+			logger.Error("Failed to transform request body for Cloudflare AI", zap.Error(err))
+			return nil, err
+		}
+		return transformedBody, nil
+	})
+
 	return nil
 }
 

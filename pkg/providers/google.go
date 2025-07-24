@@ -1,13 +1,13 @@
 package providers
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
+	"github.com/neutrome-labs/caddy-ai-router/pkg/common"
 	"github.com/neutrome-labs/caddy-ai-router/pkg/transforms"
 	"go.uber.org/zap"
 )
@@ -24,20 +24,15 @@ func (p *GoogleProvider) Name() string {
 func (p *GoogleProvider) ModifyCompletionRequest(r *http.Request, modelName string, logger *zap.Logger) error {
 	r.URL.Path = strings.TrimRight(r.URL.Path, "/") + "/models/" + modelName + ":generateContent"
 
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		logger.Error("Failed to read request body for google transformation", zap.Error(err))
-		return err
-	}
-	r.Body.Close()
+	common.HookHttpRequestBody(r, func(r *http.Request, body []byte) ([]byte, error) {
+		transformedBody, err := transforms.TransformRequestToGoogleAI(r, body, modelName, logger)
+		if err != nil {
+			logger.Error("Failed to transform request body for Google AI", zap.Error(err))
+			return nil, err
+		}
+		return transformedBody, nil
+	})
 
-	transformedBody, err := transforms.TransformRequestToGoogleAI(r, bodyBytes, modelName, logger)
-	if err != nil {
-		return err
-	}
-
-	r.Body = io.NopCloser(bytes.NewBuffer(transformedBody))
-	r.ContentLength = int64(len(transformedBody))
 	r.Header.Set("Content-Type", "application/json")
 	return nil
 }

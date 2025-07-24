@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp" // Still needed for 'next' if we keep it
+	"github.com/hbollon/go-edlib"
 	"github.com/neutrome-labs/caddy-ai-router/pkg/auth"
 	"github.com/neutrome-labs/caddy-ai-router/pkg/common"
 	"go.uber.org/zap"
@@ -62,6 +63,7 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 		return fmt.Errorf("provider not found for model %s", requestPayload.Model)
 	}
 
+	// If not in cache, fetch models, find closest match, and cache it
 	cr.mu.RLock()
 	providerConfig, ok := cr.Providers[providerName]
 	cr.mu.RUnlock()
@@ -70,10 +72,7 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 		return fmt.Errorf("internal: provider %s not found post-resolution", providerName)
 	}
 
-	reqCtx = context.WithValue(reqCtx, ProviderNameContextKeyString, providerName)
-	reqCtx = context.WithValue(reqCtx, ActualModelNameContextKeyString, actualModelName)
-	r = r.WithContext(reqCtx)
-
+	apiKey := ""
 	if apiKeyService != nil {
 		providerTarget := strings.ToLower(providerConfig.Name)
 		fetchedKey, keyErr := apiKeyService.GetExternalAPIKey(providerTarget, userID)
@@ -86,8 +85,54 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 			http.Error(w, "Forbidden: Upstream API credentials not found.", http.StatusForbidden)
 			return fmt.Errorf("API key not found for target %s", providerTarget)
 		}
-		r.Header.Set("Authorization", "Bearer "+fetchedKey)
+		apiKey = fetchedKey
 	}
+
+	// Check cache for corrected model name
+	if cachedModelName, ok := cr.knownModelsCache.Load(requestPayload.Model); ok {
+		actualModelName = cachedModelName.(string)
+		cr.logger.Debug("Using cached model name",
+			zap.String("original_model", requestPayload.Model),
+			zap.String("cached_model", actualModelName),
+		)
+	} else {
+		availableModels, fetchErr := providerConfig.Provider.FetchModels(providerConfig.APIBaseURL, apiKey, cr.httpClient, cr.logger)
+		if fetchErr != nil {
+			cr.logger.Error("Failed to fetch models for initial check", zap.Error(fetchErr))
+			// Decide if you want to proceed with the original model name or fail
+		} else {
+			var closestModel string
+			minDist := -1
+
+			for _, model := range availableModels {
+				modelName := getModelID(model)
+				if modelName == "" {
+					continue
+				}
+				dist := edlib.DamerauLevenshteinDistance(requestPayload.Model, modelName)
+				if minDist == -1 || dist < minDist {
+					minDist = dist
+					closestModel = modelName
+				}
+			}
+
+			if closestModel != "" {
+				actualModelName = closestModel
+				cr.knownModelsCache.Store(requestPayload.Model, closestModel)
+				cr.logger.Info("Found closest model match and cached it",
+					zap.String("requested_model", requestPayload.Model),
+					zap.String("closest_model", closestModel),
+				)
+			}
+		}
+	}
+
+	reqCtx = context.WithValue(reqCtx, ProviderNameContextKeyString, providerName)
+	reqCtx = context.WithValue(reqCtx, ActualModelNameContextKeyString, actualModelName)
+	reqCtx = context.WithValue(reqCtx, ExternalAPIKeyProviderContextKeyString, apiKey)
+	r = r.WithContext(reqCtx)
+
+	r.Header.Set("Authorization", "Bearer "+apiKey)
 
 	cr.logger.Info("Routing POST request",
 		zap.String("original_model", requestPayload.Model),
@@ -116,4 +161,13 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 	providerConfig.proxy.ServeHTTP(w, r)
 
 	return nil
+}
+
+func getModelID(model interface{}) string {
+	if m, ok := model.(map[string]interface{}); ok {
+		if name, ok := m["name"].(string); ok {
+			return name
+		}
+	}
+	return ""
 }

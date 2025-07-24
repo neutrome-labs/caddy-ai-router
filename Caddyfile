@@ -33,7 +33,7 @@ http://localhost:8080 {
                 }
 
                 provider cf {
-                    api_base_url "https://api.cloudflare.com/client/v4/accounts/{YOUR_ACCOUNT_ID}/ai"
+                    api_base_url "https://api.cloudflare.com/client/v4/accounts/075489db87322d0618157d8c9122859a/ai"
                     style "cloudflare"
                 }
 

@@ -19,6 +19,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const APP_VERSION = "0.1.0"
+
 const (
 	UserIDContextKeyString                 string = "ai_user_id"
 	ApiKeyIDContextKeyString               string = "ai_api_key_id"
@@ -40,6 +42,8 @@ type AICoreRouter struct {
 	logger     *zap.Logger
 	mu         sync.RWMutex
 	httpClient *http.Client
+
+	knownModelsCache *sync.Map
 }
 
 type ProviderConfig struct {
@@ -61,6 +65,7 @@ func (AICoreRouter) CaddyModule() caddy.ModuleInfo {
 func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 	cr.logger = ctx.Logger(cr)
 	cr.httpClient = &http.Client{Timeout: 15 * time.Second}
+	cr.knownModelsCache = &sync.Map{}
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 
@@ -101,73 +106,9 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 		}
 
 		p.proxy = &httputil.ReverseProxy{
-			Director: func(req *http.Request) {
-				req.URL.Scheme = p.parsedURL.Scheme
-				req.URL.Host = p.parsedURL.Host
-				req.URL.Path = p.parsedURL.Path
-				req.Host = p.parsedURL.Host
-				req.Header.Del("X-Forwarded-Proto")
-
-				modelName, _ := req.Context().Value(ActualModelNameContextKeyString).(string)
-
-				if p.Provider != nil {
-					if err := p.Provider.ModifyCompletionRequest(req, modelName, cr.logger); err != nil {
-						cr.logger.Error("failed to modify request", zap.Error(err), zap.String("provider", p.Name))
-					}
-				}
-
-				cr.logger.Info("Proxying request to provider",
-					zap.String("provider", p.Name),
-					zap.String("target_url", req.URL.String()),
-					zap.String("model", modelName),
-				)
-
-				reqCtx := req.Context()
-
-				userIDVal := reqCtx.Value(UserIDContextKeyString)
-				apiKeyIDVal := reqCtx.Value(ApiKeyIDContextKeyString)
-				userID, _ := userIDVal.(string)
-				apiKeyID, _ := apiKeyIDVal.(string)
-
-				common.FireObservabilityEvent(userID, "inference-proxy-start", map[string]interface{}{
-					"provider":     req.Context().Value(ProviderNameContextKeyString).(string),
-					"target_model": req.Context().Value(ActualModelNameContextKeyString).(string),
-					"user_id":      userID,
-					"api_key_id":   apiKeyID,
-				})
-			},
-			ModifyResponse: func(resp *http.Response) error {
-				if p.Provider != nil {
-					if err := p.Provider.ModifyCompletionResponse(nil, nil, resp, cr.logger); err != nil {
-						cr.logger.Error("failed to modify response", zap.Error(err), zap.String("provider", p.Name))
-					}
-				}
-				return nil
-			},
-			ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
-				cr.logger.Error("Upstream proxy error",
-					zap.String("provider", p.Name),
-					zap.String("target_url", req.URL.String()),
-					zap.Error(err),
-				)
-
-				reqCtx := req.Context()
-
-				userIDVal := reqCtx.Value(UserIDContextKeyString)
-				apiKeyIDVal := reqCtx.Value(ApiKeyIDContextKeyString)
-				userID, _ := userIDVal.(string)
-				apiKeyID, _ := apiKeyIDVal.(string)
-
-				common.FireObservabilityEvent(userID, "inference-proxy-error", map[string]interface{}{
-					"error":        err.Error(),
-					"provider":     req.Context().Value(ProviderNameContextKeyString).(string),
-					"target_model": req.Context().Value(ActualModelNameContextKeyString).(string),
-					"user_id":      userID,
-					"api_key_id":   apiKeyID,
-				})
-
-				http.Error(rw, fmt.Sprintf("Error proxying to upstream provider %s: %v", p.Name, err), http.StatusBadGateway)
-			},
+			Director:       cr.getDirector(p),
+			ModifyResponse: cr.getModifyResponse(p),
+			ErrorHandler:   cr.getErrorHandler(p),
 		}
 		cr.logger.Info("Provisioned provider for core router", zap.String("name", name), zap.String("base_url", p.APIBaseURL))
 	}
@@ -190,6 +131,7 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 	)
 
 	common.FireObservabilityEvent("system", "router-start", map[string]interface{}{
+		"version":                APP_VERSION,
 		"num_providers":          len(cr.Providers),
 		"super_default_provider": cr.SuperDefaultProvider,
 		"num_model_defaults":     len(cr.DefaultProviderForModel),
@@ -314,6 +256,82 @@ func (cr *AICoreRouter) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 		}
 	}
 	return nil
+}
+
+func (cr *AICoreRouter) getDirector(p *ProviderConfig) func(req *http.Request) {
+	return func(req *http.Request) {
+		req.URL.Scheme = p.parsedURL.Scheme
+		req.URL.Host = p.parsedURL.Host
+		req.URL.Path = p.parsedURL.Path
+		req.Host = p.parsedURL.Host
+		req.Header.Del("X-Forwarded-Proto")
+
+		modelName, _ := req.Context().Value(ActualModelNameContextKeyString).(string)
+
+		if p.Provider != nil {
+			if err := p.Provider.ModifyCompletionRequest(req, modelName, cr.logger); err != nil {
+				cr.logger.Error("failed to modify request", zap.Error(err), zap.String("provider", p.Name))
+			}
+		}
+
+		cr.logger.Info("Proxying request to provider",
+			zap.String("provider", p.Name),
+			zap.String("target_url", req.URL.String()),
+			zap.String("model", modelName),
+		)
+
+		reqCtx := req.Context()
+
+		userIDVal := reqCtx.Value(UserIDContextKeyString)
+		apiKeyIDVal := reqCtx.Value(ApiKeyIDContextKeyString)
+		userID, _ := userIDVal.(string)
+		apiKeyID, _ := apiKeyIDVal.(string)
+
+		common.FireObservabilityEvent(userID, "inference-proxy-start", map[string]interface{}{
+			"provider":   req.Context().Value(ProviderNameContextKeyString).(string),
+			"model":      req.Context().Value(ActualModelNameContextKeyString).(string),
+			"user_id":    userID,
+			"api_key_id": apiKeyID,
+		})
+	}
+}
+
+func (cr *AICoreRouter) getModifyResponse(p *ProviderConfig) func(resp *http.Response) error {
+	return func(resp *http.Response) error {
+		if p.Provider != nil {
+			if err := p.Provider.ModifyCompletionResponse(nil, nil, resp, cr.logger); err != nil {
+				cr.logger.Error("failed to modify response", zap.Error(err), zap.String("provider", p.Name))
+			}
+		}
+		return nil
+	}
+}
+
+func (cr *AICoreRouter) getErrorHandler(p *ProviderConfig) func(rw http.ResponseWriter, req *http.Request, err error) {
+	return func(rw http.ResponseWriter, req *http.Request, err error) {
+		cr.logger.Error("Upstream proxy error",
+			zap.String("provider", p.Name),
+			zap.String("target_url", req.URL.String()),
+			zap.Error(err),
+		)
+
+		reqCtx := req.Context()
+
+		userIDVal := reqCtx.Value(UserIDContextKeyString)
+		apiKeyIDVal := reqCtx.Value(ApiKeyIDContextKeyString)
+		userID, _ := userIDVal.(string)
+		apiKeyID, _ := apiKeyIDVal.(string)
+
+		common.FireObservabilityEvent(userID, "inference-proxy-error", map[string]interface{}{
+			"error":      err.Error(),
+			"provider":   req.Context().Value(ProviderNameContextKeyString).(string),
+			"model":      req.Context().Value(ActualModelNameContextKeyString).(string),
+			"user_id":    userID,
+			"api_key_id": apiKeyID,
+		})
+
+		http.Error(rw, fmt.Sprintf("Error proxying to upstream provider %s: %v", p.Name, err), http.StatusBadGateway)
+	}
 }
 
 func parseAICoreRouterCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
