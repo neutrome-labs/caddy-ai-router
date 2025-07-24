@@ -24,7 +24,7 @@ func TryInstrumentAppObservability() bool {
 	// defer client.Close()
 }
 
-func FireObservabilityEvent(userId, eventName string, properties map[string]interface{}) error {
+func FireObservabilityEvent(userId, eventName string, properties map[string]any) error {
 	if posthogClient == nil {
 		return nil
 	}

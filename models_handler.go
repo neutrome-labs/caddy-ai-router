@@ -50,7 +50,7 @@ type ModelInfo struct {
 	Architecture  ModelArchitectureInfo `json:"architecture"`
 	// Pricing             ModelPricingInfo        `json:"pricing"`
 	// TopProvider         ModelTopProviderDetails `json:"top_provider"`
-	// PerRequestLimits    interface{}             `json:"per_request_limits"`             // Can be null or an object, use interface{}
+	// PerRequestLimits    any             `json:"per_request_limits"`             // Can be null or an object, use any
 	SupportedParameters []string `json:"supported_parameters,omitempty"` // Optional
 }
 
@@ -117,25 +117,19 @@ func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Re
 
 			var modelInfos []ModelInfo
 			for _, model := range models {
-				modelMap, ok := model.(map[string]interface{})
-				if !ok {
-					cr.logger.Warn("Failed to assert model to map[string]interface{}", zap.String("provider", providerConfig.Name))
-					continue
-				}
-
 				var id string
 				var name string
-				if modelID, ok := modelMap["id"].(string); ok {
+				if modelID, ok := model["id"].(string); ok {
 					id = modelID
 				} else {
-					cr.logger.Warn("Model ID is not a string", zap.Any("model", modelMap), zap.String("provider", providerConfig.Name))
+					cr.logger.Warn("Model ID is not a string", zap.Any("model", model), zap.String("provider", providerConfig.Name))
 					continue
 				}
 
-				if modelName, ok := modelMap["name"].(string); ok {
+				if modelName, ok := model["name"].(string); ok {
 					name = modelName
 				} else {
-					cr.logger.Warn("Model name is not a string", zap.Any("model", modelMap), zap.String("provider", providerConfig.Name))
+					cr.logger.Warn("Model name is not a string", zap.Any("model", model), zap.String("provider", providerConfig.Name))
 					name = id // Fallback to ID if name is not available
 				}
 

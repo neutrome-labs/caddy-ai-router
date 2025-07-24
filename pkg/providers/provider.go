@@ -15,5 +15,5 @@ type Provider interface {
 	// ModifyCompletionResponse transforms the provider's response to the unified format.
 	ModifyCompletionResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, logger *zap.Logger) error
 	// FetchModels fetches the models from the provider.
-	FetchModels(baseURL string, apiKey string, httpClient *http.Client, logger *zap.Logger) ([]interface{}, error)
+	FetchModels(baseURL string, apiKey string, httpClient *http.Client, logger *zap.Logger) ([]map[string]any, error)
 }

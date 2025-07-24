@@ -52,6 +52,6 @@ func (p *AnthropicProvider) ModifyCompletionResponse(w http.ResponseWriter, r *h
 }
 
 // FetchModels is a no-op for Anthropic as they don't have a models API.
-func (p *AnthropicProvider) FetchModels(baseURL string, apiKey string, httpClient *http.Client, logger *zap.Logger) ([]interface{}, error) {
+func (p *AnthropicProvider) FetchModels(baseURL string, apiKey string, httpClient *http.Client, logger *zap.Logger) ([]map[string]any, error) {
 	return nil, nil
 }

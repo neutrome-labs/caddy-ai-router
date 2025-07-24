@@ -42,7 +42,7 @@ func (p *CloudflareProvider) ModifyCompletionResponse(w http.ResponseWriter, r *
 }
 
 // FetchModels fetches the models from the Cloudflare API.
-func (p *CloudflareProvider) FetchModels(baseURL string, apiKey string, httpClient *http.Client, logger *zap.Logger) ([]interface{}, error) {
+func (p *CloudflareProvider) FetchModels(baseURL string, apiKey string, httpClient *http.Client, logger *zap.Logger) ([]map[string]any, error) {
 	modelsURL := strings.TrimRight(baseURL, "/") + "/models/search"
 	req, err := http.NewRequest(http.MethodGet, modelsURL, nil)
 	if err != nil {
@@ -65,21 +65,19 @@ func (p *CloudflareProvider) FetchModels(baseURL string, apiKey string, httpClie
 	}
 
 	var providerResp struct {
-		Result []interface{} `json:"result"`
+		Result []map[string]any `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&providerResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response from %s: %w", modelsURL, err)
 	}
 
-	var models []interface{}
+	var models []map[string]any
 	for _, model := range providerResp.Result {
-		if m, ok := model.(map[string]interface{}); ok {
-			if name, ok := m["name"].(string); ok {
-				models = append(models, map[string]interface{}{
-					"id":   name,
-					"name": name,
-				})
-			}
+		if name, ok := model["name"].(string); ok {
+			models = append(models, map[string]any{
+				"id":   name,
+				"name": name,
+			})
 		}
 	}
 

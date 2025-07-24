@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/neutrome-labs/caddy-ai-router/pkg/common"
+	"github.com/neutrome-labs/caddy-ai-router/pkg/transforms"
 	"go.uber.org/zap"
 )
 
@@ -21,6 +23,16 @@ func (p *OpenAIProvider) Name() string {
 // ModifyCompletionRequest sets the URL path for the completion request.
 func (p *OpenAIProvider) ModifyCompletionRequest(r *http.Request, modelName string, logger *zap.Logger) error {
 	r.URL.Path = strings.TrimRight(r.URL.Path, "/") + "/chat/completions"
+
+	common.HookHttpRequestBody(r, func(r *http.Request, body []byte) ([]byte, error) {
+		transformedBody, err := transforms.TransformRequestToOpenAI(r, body, modelName, logger)
+		if err != nil {
+			logger.Error("Failed to transform request body for OpenAI", zap.Error(err))
+			return nil, err
+		}
+		return transformedBody, nil
+	})
+
 	return nil
 }
 
@@ -30,7 +42,7 @@ func (p *OpenAIProvider) ModifyCompletionResponse(w http.ResponseWriter, r *http
 }
 
 // FetchModels fetches the models from the OpenAI API.
-func (p *OpenAIProvider) FetchModels(baseURL string, apiKey string, httpClient *http.Client, logger *zap.Logger) ([]interface{}, error) {
+func (p *OpenAIProvider) FetchModels(baseURL string, apiKey string, httpClient *http.Client, logger *zap.Logger) ([]map[string]any, error) {
 	modelsURL := strings.TrimRight(baseURL, "/") + "/models"
 	req, err := http.NewRequest(http.MethodGet, modelsURL, nil)
 	if err != nil {
@@ -53,7 +65,7 @@ func (p *OpenAIProvider) FetchModels(baseURL string, apiKey string, httpClient *
 	}
 
 	var providerResp struct {
-		Data []interface{} `json:"data"`
+		Data []map[string]any `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&providerResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response from %s: %w", modelsURL, err)

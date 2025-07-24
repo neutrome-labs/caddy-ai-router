@@ -105,7 +105,7 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 			minDist := -1
 
 			for _, model := range availableModels {
-				modelName := getModelID(model)
+				modelName := model["id"].(string)
 				if modelName == "" {
 					continue
 				}
@@ -142,7 +142,7 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 		zap.String("api_key_id", apiKeyID),
 	)
 
-	common.FireObservabilityEvent(userID, "inference-start", map[string]interface{}{
+	common.FireObservabilityEvent(userID, "inference-start", map[string]any{
 		"model":      requestPayload.Model,
 		"user_id":    userID,
 		"api_key_id": apiKeyID,
@@ -150,7 +150,7 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 
 	start_time := common.CaddyClock.Now()
 	defer func() {
-		common.FireObservabilityEvent(userID, "inference-stop", map[string]interface{}{
+		common.FireObservabilityEvent(userID, "inference-stop", map[string]any{
 			"model":       requestPayload.Model,
 			"duration_ms": common.CaddyClock.Now().Sub(start_time).Milliseconds(),
 			"user_id":     userID,
@@ -161,13 +161,4 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 	providerConfig.proxy.ServeHTTP(w, r)
 
 	return nil
-}
-
-func getModelID(model interface{}) string {
-	if m, ok := model.(map[string]interface{}); ok {
-		if id, ok := m["id"].(string); ok {
-			return id
-		}
-	}
-	return ""
 }

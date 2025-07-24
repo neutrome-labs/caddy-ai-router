@@ -130,7 +130,7 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 		zap.Int("num_model_defaults", len(cr.DefaultProviderForModel)),
 	)
 
-	common.FireObservabilityEvent("system", "router-start", map[string]interface{}{
+	common.FireObservabilityEvent("system", "router-start", map[string]any{
 		"version":                APP_VERSION,
 		"num_providers":          len(cr.Providers),
 		"super_default_provider": cr.SuperDefaultProvider,
@@ -287,7 +287,7 @@ func (cr *AICoreRouter) getDirector(p *ProviderConfig) func(req *http.Request) {
 		userID, _ := userIDVal.(string)
 		apiKeyID, _ := apiKeyIDVal.(string)
 
-		common.FireObservabilityEvent(userID, "inference-proxy-start", map[string]interface{}{
+		common.FireObservabilityEvent(userID, "inference-proxy-start", map[string]any{
 			"provider":   req.Context().Value(ProviderNameContextKeyString).(string),
 			"model":      req.Context().Value(ActualModelNameContextKeyString).(string),
 			"user_id":    userID,
@@ -299,6 +299,11 @@ func (cr *AICoreRouter) getDirector(p *ProviderConfig) func(req *http.Request) {
 func (cr *AICoreRouter) getModifyResponse(p *ProviderConfig) func(resp *http.Response) error {
 	return func(resp *http.Response) error {
 		if p.Provider != nil {
+			if resp.Header.Get("X-Provider-Name") == "" {
+				modelName, _ := resp.Request.Context().Value(ActualModelNameContextKeyString).(string)
+				resp.Header.Set("X-Provider-Name", p.Name)
+				resp.Header.Set("X-Model-Name", modelName)
+			}
 			if err := p.Provider.ModifyCompletionResponse(nil, nil, resp, cr.logger); err != nil {
 				cr.logger.Error("failed to modify response", zap.Error(err), zap.String("provider", p.Name))
 			}
@@ -322,7 +327,7 @@ func (cr *AICoreRouter) getErrorHandler(p *ProviderConfig) func(rw http.Response
 		userID, _ := userIDVal.(string)
 		apiKeyID, _ := apiKeyIDVal.(string)
 
-		common.FireObservabilityEvent(userID, "inference-proxy-error", map[string]interface{}{
+		common.FireObservabilityEvent(userID, "inference-proxy-error", map[string]any{
 			"error":      err.Error(),
 			"provider":   req.Context().Value(ProviderNameContextKeyString).(string),
 			"model":      req.Context().Value(ActualModelNameContextKeyString).(string),

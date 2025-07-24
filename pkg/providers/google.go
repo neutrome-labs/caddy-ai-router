@@ -49,7 +49,7 @@ func (p *GoogleProvider) ModifyCompletionResponse(w http.ResponseWriter, r *http
 }
 
 // FetchModels fetches the models from the Google AI API.
-func (p *GoogleProvider) FetchModels(baseURL string, apiKey string, httpClient *http.Client, logger *zap.Logger) ([]interface{}, error) {
+func (p *GoogleProvider) FetchModels(baseURL string, apiKey string, httpClient *http.Client, logger *zap.Logger) ([]map[string]any, error) {
 	modelsURL := strings.TrimRight(baseURL, "/") + "/v1beta/models"
 	req, err := http.NewRequest(http.MethodGet, modelsURL, nil)
 	if err != nil {
@@ -74,7 +74,7 @@ func (p *GoogleProvider) FetchModels(baseURL string, apiKey string, httpClient *
 	}
 
 	var providerResp struct {
-		Models []interface{} `json:"models"`
+		Models []map[string]any `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&providerResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response from %s: %w", modelsURL, err)

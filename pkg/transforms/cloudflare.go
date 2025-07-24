@@ -11,7 +11,7 @@ import (
 func TransformRequestToCloudflareAI(r *http.Request, originalBody []byte, modelName string, logger *zap.Logger) ([]byte, error) {
 	// we need to unset model from body since Cloudflare AI expects it in the URL path
 
-	var bodyMap map[string]interface{}
+	var bodyMap map[string]any
 	if err := json.Unmarshal(originalBody, &bodyMap); err != nil {
 		logger.Error("Failed to unmarshal request body for Cloudflare AI transformation", zap.Error(err))
 		return nil, err
