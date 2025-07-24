@@ -125,6 +125,7 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 	}
 
 	cr.logger.Info("AI Core Router provisioned",
+		zap.String("version", APP_VERSION),
 		zap.Int("num_providers", len(cr.Providers)),
 		zap.String("super_default_provider", cr.SuperDefaultProvider),
 		zap.Int("num_model_defaults", len(cr.DefaultProviderForModel)),
