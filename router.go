@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const APP_VERSION = "0.1.0"
+const APP_VERSION = "0.2.0"
 
 const (
 	UserIDContextKeyString                 string = "ai_user_id"
@@ -36,8 +36,8 @@ func init() {
 
 type AICoreRouter struct {
 	Providers               map[string]*ProviderConfig `json:"providers,omitempty"`
-	DefaultProviderForModel map[string]string          `json:"default_provider_for_model,omitempty"`
-	SuperDefaultProvider    string                     `json:"super_default_provider,omitempty"`
+	DefaultProviderForModel map[string][]string        `json:"default_provider_for_model,omitempty"`
+	ProviderOrder           []string                   `json:"provider_order,omitempty"`
 
 	logger     *zap.Logger
 	mu         sync.RWMutex
@@ -79,11 +79,11 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 		cr.Providers = make(map[string]*ProviderConfig)
 	}
 	if cr.DefaultProviderForModel == nil {
-		cr.DefaultProviderForModel = make(map[string]string)
+		cr.DefaultProviderForModel = make(map[string][]string)
 	}
 
-	for name, p := range cr.Providers {
-		p := p // Capture range variable
+	for _, name := range cr.ProviderOrder {
+		p := cr.Providers[name]
 		p.Name = name
 		if p.APIBaseURL == "" {
 			return fmt.Errorf("provider %s: api_base_url is required", name)
@@ -113,29 +113,24 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 		cr.logger.Info("Provisioned provider for core router", zap.String("name", name), zap.String("base_url", p.APIBaseURL))
 	}
 
-	if cr.SuperDefaultProvider != "" {
-		if _, ok := cr.Providers[cr.SuperDefaultProvider]; !ok {
-			return fmt.Errorf("super_default_provider '%s' is not a configured provider", cr.SuperDefaultProvider)
-		}
-	}
-	for model, providerName := range cr.DefaultProviderForModel {
-		if _, ok := cr.Providers[providerName]; !ok {
-			return fmt.Errorf("default provider '%s' for model '%s' is not a configured provider", providerName, model)
+	for model, providerNames := range cr.DefaultProviderForModel {
+		for _, providerName := range providerNames {
+			if _, ok := cr.Providers[providerName]; !ok {
+				return fmt.Errorf("default provider '%s' for model '%s' is not a configured provider", providerName, model)
+			}
 		}
 	}
 
 	cr.logger.Info("AI Core Router provisioned",
 		zap.String("version", APP_VERSION),
 		zap.Int("num_providers", len(cr.Providers)),
-		zap.String("super_default_provider", cr.SuperDefaultProvider),
 		zap.Int("num_model_defaults", len(cr.DefaultProviderForModel)),
 	)
 
 	common.FireObservabilityEvent("system", "router-start", map[string]any{
-		"version":                APP_VERSION,
-		"num_providers":          len(cr.Providers),
-		"super_default_provider": cr.SuperDefaultProvider,
-		"num_model_defaults":     len(cr.DefaultProviderForModel),
+		"version":            APP_VERSION,
+		"num_providers":      len(cr.Providers),
+		"num_model_defaults": len(cr.DefaultProviderForModel),
 	})
 
 	return nil
@@ -147,11 +142,6 @@ func (cr *AICoreRouter) Validate() error {
 
 	if len(cr.Providers) == 0 {
 		return fmt.Errorf("at least one provider must be configured for ai_core_router")
-	}
-	if cr.SuperDefaultProvider != "" {
-		if _, ok := cr.Providers[cr.SuperDefaultProvider]; !ok {
-			return fmt.Errorf("super_default_provider '%s' is not a configured provider", cr.SuperDefaultProvider)
-		}
 	}
 	return nil
 }
@@ -201,7 +191,10 @@ func (cr *AICoreRouter) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 		cr.Providers = make(map[string]*ProviderConfig)
 	}
 	if cr.DefaultProviderForModel == nil {
-		cr.DefaultProviderForModel = make(map[string]string)
+		cr.DefaultProviderForModel = make(map[string][]string)
+	}
+	if cr.ProviderOrder == nil {
+		cr.ProviderOrder = []string{}
 	}
 
 	for d.Next() {
@@ -238,19 +231,18 @@ func (cr *AICoreRouter) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("provider %s: api_base_url is required", providerName)
 				}
 				cr.Providers[providerName] = p
+				cr.ProviderOrder = append(cr.ProviderOrder, providerName)
 			case "default_provider_for_model":
 				args := d.RemainingArgs()
-				if len(args) != 2 {
-					return d.Errf("default_provider_for_model expects <model_name> <provider_name>, got %d args", len(args))
+				if len(args) < 2 {
+					return d.Errf("default_provider_for_model expects <model_name> <provider_name_1> [<provider_name_2>...], got %d args", len(args))
 				}
 				modelName := args[0]
-				providerName := strings.ToLower(args[1])
-				cr.DefaultProviderForModel[modelName] = providerName
-			case "super_default_provider":
-				if !d.NextArg() {
-					return d.ArgErr()
+				providerNames := []string{}
+				for _, pName := range args[1:] {
+					providerNames = append(providerNames, strings.ToLower(pName))
 				}
-				cr.SuperDefaultProvider = strings.ToLower(d.Val())
+				cr.DefaultProviderForModel[modelName] = providerNames
 			default:
 				return d.Errf("unrecognized ai_core_router option '%s'", d.Val())
 			}

@@ -39,10 +39,7 @@ http://localhost:8080 {
 
                 # Define default providers for specific models
                 default_provider_for_model "gemini-pro" "google"
-                default_provider_for_model "claude-3-opus-20240229" "anthropic"
-
-                # Define the super-default provider
-                super_default_provider "openrouter"
+                default_provider_for_model "claude-3-opus-20240229" "anthropic" "openrouter"
             }
         }
     }

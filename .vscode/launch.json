@@ -16,7 +16,8 @@
                 "--config",
                 "Caddyfile.local"
             ],
-            "envFile": "${workspaceFolder}/.env"
+            "envFile": "${workspaceFolder}/.env",
+            "preLaunchTask": "build"
         }
     ]
 }

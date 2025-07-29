@@ -58,9 +58,99 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 	}
 
 	providerName, actualModelName := cr.resolveProviderAndModel(requestPayload.Model)
+	if actualModelName == "" {
+		http.Error(w, "Could not resolve model name", http.StatusBadRequest)
+		return fmt.Errorf("could not resolve model name for %s", requestPayload.Model)
+	}
+
 	if providerName == "" {
-		http.Error(w, fmt.Sprintf("Could not determine provider for model: %s", requestPayload.Model), http.StatusBadRequest)
-		return fmt.Errorf("provider not found for model %s", requestPayload.Model)
+		// Check cache for corrected model name
+		if cachedModel, ok := cr.knownModelsCache.Load(requestPayload.Model); ok {
+			cached := cachedModel.(map[string]string)
+			actualModelName = cached["actualModelName"]
+			providerName = cached["providerName"]
+			cr.logger.Debug("Using cached model name",
+				zap.String("original_model", requestPayload.Model),
+				zap.String("cached_model", actualModelName),
+				zap.String("provider", providerName),
+			)
+		} else {
+			var providerNamesToCheck []string
+			if pNames, ok := cr.DefaultProviderForModel[requestPayload.Model]; ok {
+				providerNamesToCheck = pNames
+			} else {
+				providerNamesToCheck = cr.ProviderOrder
+			}
+
+			var foundProvider bool
+			for _, pName := range providerNamesToCheck {
+				pConfig, pOk := cr.Providers[pName]
+				if !pOk {
+					continue
+				}
+
+				apiKey := ""
+				if apiKeyService != nil {
+					providerTarget := strings.ToLower(pConfig.Name)
+					fetchedKey, keyErr := apiKeyService.GetExternalAPIKey(providerTarget, userID)
+					if keyErr != nil {
+						cr.logger.Error("Failed to fetch upstream API key", zap.Error(keyErr), zap.String("provider", providerTarget))
+						http.Error(w, "Service Unavailable: Could not retrieve API credentials.", http.StatusServiceUnavailable)
+						return keyErr
+					}
+					if fetchedKey == "" {
+						http.Error(w, "Forbidden: Upstream API credentials not found.", http.StatusForbidden)
+						return fmt.Errorf("API key not found for target %s", providerTarget)
+					}
+					apiKey = fetchedKey
+				}
+
+				availableModels, fetchErr := pConfig.Provider.FetchModels(pConfig.APIBaseURL, apiKey, cr.httpClient, cr.logger)
+				if fetchErr != nil {
+					cr.logger.Error("Failed to fetch models for initial check", zap.Error(fetchErr), zap.String("provider", pName))
+					continue
+				}
+
+				var closestModel string
+				minDist := -1
+
+				for _, model := range availableModels {
+					modelID := model["id"].(string)
+					if modelID == "" {
+						continue
+					}
+					if !strings.Contains(modelID, requestPayload.Model) {
+						continue
+					}
+					dist := edlib.DamerauLevenshteinDistance(requestPayload.Model, modelID)
+					if minDist == -1 || dist < minDist {
+						minDist = dist
+						closestModel = modelID
+					}
+				}
+
+				if closestModel != "" {
+					actualModelName = closestModel
+					providerName = pName
+					cr.knownModelsCache.Store(requestPayload.Model, map[string]string{
+						"actualModelName": closestModel,
+						"providerName":    pName,
+					})
+					cr.logger.Info("Found closest model match and cached it",
+						zap.String("requested_model", requestPayload.Model),
+						zap.String("closest_model", closestModel),
+						zap.String("provider", pName),
+					)
+					foundProvider = true
+					break
+				}
+			}
+
+			if !foundProvider {
+				http.Error(w, fmt.Sprintf("Could not find any provider for model: %s", requestPayload.Model), http.StatusBadRequest)
+				return fmt.Errorf("no provider found for model %s", requestPayload.Model)
+			}
+		}
 	}
 
 	// If not in cache, fetch models, find closest match, and cache it
@@ -88,51 +178,20 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 		apiKey = fetchedKey
 	}
 
-	// Check cache for corrected model name
-	if cachedModelName, ok := cr.knownModelsCache.Load(requestPayload.Model); ok {
-		actualModelName = cachedModelName.(string)
-		cr.logger.Debug("Using cached model name",
-			zap.String("original_model", requestPayload.Model),
-			zap.String("cached_model", actualModelName),
-		)
-	} else {
-		availableModels, fetchErr := providerConfig.Provider.FetchModels(providerConfig.APIBaseURL, apiKey, cr.httpClient, cr.logger)
-		if fetchErr != nil {
-			cr.logger.Error("Failed to fetch models for initial check", zap.Error(fetchErr))
-			// Decide if you want to proceed with the original model name or fail
-		} else {
-			var closestModel string
-			minDist := -1
-
-			for _, model := range availableModels {
-				modelName := model["id"].(string)
-				if modelName == "" {
-					continue
-				}
-				dist := edlib.DamerauLevenshteinDistance(requestPayload.Model, modelName)
-				if minDist == -1 || dist < minDist {
-					minDist = dist
-					closestModel = modelName
-				}
-			}
-
-			if closestModel != "" {
-				actualModelName = closestModel
-				cr.knownModelsCache.Store(requestPayload.Model, closestModel)
-				cr.logger.Info("Found closest model match and cached it",
-					zap.String("requested_model", requestPayload.Model),
-					zap.String("closest_model", closestModel),
-				)
-			}
-		}
-	}
-
 	reqCtx = context.WithValue(reqCtx, ProviderNameContextKeyString, providerName)
 	reqCtx = context.WithValue(reqCtx, ActualModelNameContextKeyString, actualModelName)
 	reqCtx = context.WithValue(reqCtx, ExternalAPIKeyProviderContextKeyString, apiKey)
 	r = r.WithContext(reqCtx)
 
 	r.Header.Set("Authorization", "Bearer "+apiKey)
+
+	cr.mu.RLock()
+	providerConfig, ok = cr.Providers[providerName]
+	cr.mu.RUnlock()
+	if !ok {
+		http.Error(w, "Internal server error: provider configuration missing", http.StatusInternalServerError)
+		return fmt.Errorf("internal: provider %s not found post-resolution", providerName)
+	}
 
 	cr.logger.Info("Routing POST request",
 		zap.String("original_model", requestPayload.Model),

@@ -29,22 +29,14 @@ func (cr *AICoreRouter) resolveProviderAndModel(requestedModel string) (provider
 	}
 
 	// Check for model-specific default provider
-	if pName, ok := cr.DefaultProviderForModel[requestedModel]; ok {
-		if _, providerExists := cr.Providers[pName]; providerExists {
-			cr.logger.Debug("Found default provider for model", zap.String("model", requestedModel), zap.String("provider", pName)) // Changed to Debug
-			return pName, requestedModel                                                                                            // Model name remains as requested
+	if pNames, ok := cr.DefaultProviderForModel[requestedModel]; ok {
+		for _, pName := range pNames {
+			if _, providerExists := cr.Providers[pName]; providerExists {
+				cr.logger.Debug("Found default provider for model", zap.String("model", requestedModel), zap.String("provider", pName)) // Changed to Debug
+				return pName, requestedModel                                                                                            // Model name remains as requested
+			}
+			cr.logger.Warn("Default provider for model configured but provider itself not found", zap.String("model", requestedModel), zap.String("configured_provider", pName))
 		}
-		cr.logger.Warn("Default provider for model configured but provider itself not found", zap.String("model", requestedModel), zap.String("configured_provider", pName))
-	}
-
-	// Use super default provider if no other match
-	if cr.SuperDefaultProvider != "" {
-		if _, ok := cr.Providers[cr.SuperDefaultProvider]; ok {
-			cr.logger.Debug("Using super default provider", zap.String("provider", cr.SuperDefaultProvider), zap.String("model", requestedModel)) // Changed to Debug
-			return cr.SuperDefaultProvider, requestedModel                                                                                        // Model name remains as requested
-		}
-		// This case should ideally be caught during Provision/Validate, but good to log
-		cr.logger.Error("Super default provider configured but not found in providers list during resolution", zap.String("super_default_provider", cr.SuperDefaultProvider))
 	}
 
 	// If no provider could be resolved
