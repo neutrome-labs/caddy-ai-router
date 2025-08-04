@@ -24,13 +24,17 @@ func TryInstrumentAppObservability() bool {
 	// defer client.Close()
 }
 
-func FireObservabilityEvent(userId, eventName string, properties map[string]any) error {
+func FireObservabilityEvent(userId, url, eventName string, properties map[string]any) error {
 	if posthogClient == nil {
 		return nil
 	}
 
 	if userId == "" {
 		userId = "unknown"
+	}
+
+	if url != "" {
+		properties["$current_url"] = url
 	}
 
 	return posthogClient.Enqueue(posthog.Capture{

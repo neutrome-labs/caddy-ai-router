@@ -127,7 +127,7 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 		zap.Int("num_model_defaults", len(cr.DefaultProviderForModel)),
 	)
 
-	common.FireObservabilityEvent("system", "router-start", map[string]any{
+	common.FireObservabilityEvent("system", "", "router_start", map[string]any{
 		"version":            APP_VERSION,
 		"num_providers":      len(cr.Providers),
 		"num_model_defaults": len(cr.DefaultProviderForModel),
@@ -172,8 +172,19 @@ func (cr *AICoreRouter) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 		apiKeyService = auth.NewDefaultEnvAPIKeyProvider(cr.logger)
 	}
 
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	urlWithoutQs := scheme + "://" + r.Host + "/<prefix>" + r.URL.Path
+	defer func() {
+		common.FireObservabilityEvent("system", urlWithoutQs, "$pageview", map[string]any{
+			"$ip": r.RemoteAddr,
+		})
+	}()
+
 	if r.Method == http.MethodGet && r.URL.Path == "/models" {
-		return cr.handleGetManagedModels(w, r.WithContext(reqCtx), apiKeyService)
+		return cr.handleGetManagedModels(w, r.WithContext(reqCtx), next, apiKeyService)
 	}
 
 	if r.Method == http.MethodPost && r.URL.Path == "/chat/completions" {
@@ -252,37 +263,38 @@ func (cr *AICoreRouter) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 }
 
 func (cr *AICoreRouter) getDirector(p *ProviderConfig) func(req *http.Request) {
-	return func(req *http.Request) {
-		req.URL.Scheme = p.parsedURL.Scheme
-		req.URL.Host = p.parsedURL.Host
-		req.URL.Path = p.parsedURL.Path
-		req.Host = p.parsedURL.Host
-		req.Header.Del("X-Forwarded-Proto")
+	return func(r *http.Request) {
+		r.URL.Scheme = p.parsedURL.Scheme
+		r.URL.Host = p.parsedURL.Host
+		r.URL.Path = p.parsedURL.Path
+		r.Host = p.parsedURL.Host
+		r.Header.Del("X-Forwarded-Proto")
 
-		modelName, _ := req.Context().Value(ActualModelNameContextKeyString).(string)
+		modelName, _ := r.Context().Value(ActualModelNameContextKeyString).(string)
 
 		if p.Provider != nil {
-			if err := p.Provider.ModifyCompletionRequest(req, modelName, cr.logger); err != nil {
+			if err := p.Provider.ModifyCompletionRequest(r, modelName, cr.logger); err != nil {
 				cr.logger.Error("failed to modify request", zap.Error(err), zap.String("provider", p.Name))
 			}
 		}
 
 		cr.logger.Info("Proxying request to provider",
 			zap.String("provider", p.Name),
-			zap.String("target_url", req.URL.String()),
+			zap.String("target_url", r.URL.String()),
 			zap.String("model", modelName),
 		)
 
-		reqCtx := req.Context()
+		reqCtx := r.Context()
 
 		userIDVal := reqCtx.Value(UserIDContextKeyString)
 		apiKeyIDVal := reqCtx.Value(ApiKeyIDContextKeyString)
 		userID, _ := userIDVal.(string)
 		apiKeyID, _ := apiKeyIDVal.(string)
 
-		common.FireObservabilityEvent(userID, "inference-proxy-start", map[string]any{
-			"provider":   req.Context().Value(ProviderNameContextKeyString).(string),
-			"model":      req.Context().Value(ActualModelNameContextKeyString).(string),
+		common.FireObservabilityEvent(userID, "", "inference_proxy_request", map[string]any{
+			"$ip":        r.RemoteAddr,
+			"provider":   r.Context().Value(ProviderNameContextKeyString).(string),
+			"model":      r.Context().Value(ActualModelNameContextKeyString).(string),
 			"user_id":    userID,
 			"api_key_id": apiKeyID,
 		})
@@ -296,6 +308,19 @@ func (cr *AICoreRouter) getModifyResponse(p *ProviderConfig) func(resp *http.Res
 				modelName, _ := resp.Request.Context().Value(ActualModelNameContextKeyString).(string)
 				resp.Header.Set("X-Provider-Name", p.Name)
 				resp.Header.Set("X-Model-Name", modelName)
+
+				userID, _ := resp.Request.Context().Value(UserIDContextKeyString).(string)
+				apiKeyID, _ := resp.Request.Context().Value(ApiKeyIDContextKeyString).(string)
+
+				common.FireObservabilityEvent(userID, "", "inference_proxy_response", map[string]any{
+					"$ip":          resp.Request.RemoteAddr,
+					"status_code":  resp.StatusCode,
+					"content_type": resp.Header.Get("Content-Type"),
+					"provider":     p.Name,
+					"model":        modelName,
+					"user_id":      userID,
+					"api_key_id":   apiKeyID,
+				})
 			}
 			if err := p.Provider.ModifyCompletionResponse(nil, nil, resp, cr.logger); err != nil {
 				cr.logger.Error("failed to modify response", zap.Error(err), zap.String("provider", p.Name))
@@ -305,25 +330,39 @@ func (cr *AICoreRouter) getModifyResponse(p *ProviderConfig) func(resp *http.Res
 	}
 }
 
-func (cr *AICoreRouter) getErrorHandler(p *ProviderConfig) func(rw http.ResponseWriter, req *http.Request, err error) {
-	return func(rw http.ResponseWriter, req *http.Request, err error) {
+func (cr *AICoreRouter) getErrorHandler(p *ProviderConfig) func(rw http.ResponseWriter, r *http.Request, err error) {
+	return func(rw http.ResponseWriter, r *http.Request, err error) {
+		urlWithoutQs := r.URL.String()
+		if r.URL.RawQuery != "" {
+			urlWithoutQs = urlWithoutQs[:len(urlWithoutQs)-len(r.URL.RawQuery)-1]
+		}
+
 		cr.logger.Error("Upstream proxy error",
 			zap.String("provider", p.Name),
-			zap.String("target_url", req.URL.String()),
+			zap.String("target_url", urlWithoutQs),
 			zap.Error(err),
 		)
 
-		reqCtx := req.Context()
+		reqCtx := r.Context()
 
 		userIDVal := reqCtx.Value(UserIDContextKeyString)
 		apiKeyIDVal := reqCtx.Value(ApiKeyIDContextKeyString)
 		userID, _ := userIDVal.(string)
 		apiKeyID, _ := apiKeyIDVal.(string)
 
-		common.FireObservabilityEvent(userID, "inference-proxy-error", map[string]any{
-			"error":      err.Error(),
-			"provider":   req.Context().Value(ProviderNameContextKeyString).(string),
-			"model":      req.Context().Value(ActualModelNameContextKeyString).(string),
+		common.FireObservabilityEvent(userID, urlWithoutQs, "$exception", map[string]any{
+			"$exception_list": []map[string]any{
+				{
+					"type":  "ProxyError",
+					"value": err.Error(),
+					"mechanism": map[string]any{
+						"handled":   true,
+						"synthetic": false,
+					},
+				},
+			},
+			"provider":   r.Context().Value(ProviderNameContextKeyString).(string),
+			"model":      r.Context().Value(ActualModelNameContextKeyString).(string),
 			"user_id":    userID,
 			"api_key_id": apiKeyID,
 		})

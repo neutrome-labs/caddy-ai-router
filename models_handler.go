@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/neutrome-labs/caddy-ai-router/pkg/auth"
 	"go.uber.org/zap"
 )
@@ -72,7 +73,7 @@ type providerModelResult struct {
 }
 
 // handleGetManagedModels handles GET requests to /models.
-func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Request, apiKeyService auth.ExternalAPIKeyProvider) error {
+func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, apiKeyService auth.ExternalAPIKeyProvider) error {
 	cr.mu.RLock()
 	providerConfigs := make([]*ProviderConfig, 0, len(cr.Providers))
 	for _, pCfg := range cr.Providers {
@@ -166,5 +167,6 @@ func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(AggregatedModelsResponse{Data: allModels})
-	return nil
+
+	return next.ServeHTTP(w, r.WithContext(r.Context()))
 }
