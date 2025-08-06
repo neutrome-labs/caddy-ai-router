@@ -312,10 +312,19 @@ func (cr *AICoreRouter) getModifyResponse(p *ProviderConfig) func(resp *http.Res
 				userID, _ := resp.Request.Context().Value(UserIDContextKeyString).(string)
 				apiKeyID, _ := resp.Request.Context().Value(ApiKeyIDContextKeyString).(string)
 
+				body := ""
+				if resp.StatusCode >= 299 {
+					bodyBytes, err := httputil.DumpResponse(resp, false)
+					if err == nil {
+						body = string(bodyBytes)
+					}
+				}
+
 				common.FireObservabilityEvent(userID, "", "inference_proxy_response", map[string]any{
 					"$ip":          resp.Request.RemoteAddr,
 					"status_code":  resp.StatusCode,
 					"content_type": resp.Header.Get("Content-Type"),
+					"body":         body, // todo: if OBSERVE_PROXY_RESPONSE_BODY
 					"provider":     p.Name,
 					"model":        modelName,
 					"user_id":      userID,

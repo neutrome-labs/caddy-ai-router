@@ -201,13 +201,7 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 		zap.String("api_key_id", apiKeyID),
 	)
 
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	urlWithoutQs := scheme + "://" + r.Host + "/<prefix>" + r.URL.Path
-
-	common.FireObservabilityEvent(userID, urlWithoutQs, "inference_start", map[string]any{
+	common.FireObservabilityEvent(userID, "", "inference_start", map[string]any{
 		"$ip":        r.RemoteAddr,
 		"model":      requestPayload.Model,
 		"user_id":    userID,
@@ -216,7 +210,7 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 
 	start_time := common.CaddyClock.Now()
 	defer func() {
-		common.FireObservabilityEvent(userID, urlWithoutQs, "inference_stop", map[string]any{
+		common.FireObservabilityEvent(userID, "", "inference_stop", map[string]any{
 			"$ip":         r.RemoteAddr,
 			"model":       requestPayload.Model,
 			"duration_ms": common.CaddyClock.Now().Sub(start_time).Milliseconds(),
