@@ -39,6 +39,93 @@ func (p *CloudflareProvider) ModifyCompletionRequest(r *http.Request, modelName 
 
 // ModifyCompletionResponse is a no-op for Cloudflare.
 func (p *CloudflareProvider) ModifyCompletionResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, logger *zap.Logger) error {
+	// convert from responses fromat to default
+	// eg {"response":"","usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}} to {"choices":[{"text":"","index":0,"logprobs":null,"finish_reason":""}]}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Error("Failed to read response body for Cloudflare AI", zap.Error(err))
+		return err
+	}
+
+	respBodyStr := string(respBody)
+
+	// Check if this is a streaming response with multiple data chunks
+	if strings.Contains(respBodyStr, "data: ") {
+		// Split by "data: " and process each chunk
+		chunks := strings.Split(respBodyStr, "data: ")
+		var transformedChunks []string
+
+		for _, chunk := range chunks {
+			chunk = strings.TrimSpace(chunk)
+			if chunk == "" {
+				continue
+			}
+
+			var respBodyJson map[string]any
+			if err := json.Unmarshal([]byte(chunk), &respBodyJson); err != nil {
+				logger.Error("Failed to decode response chunk for Cloudflare AI", zap.Error(err))
+				continue
+			}
+
+			// Map Cloudflare's response format to the default format
+			defaultResp := map[string]any{
+				"choices": []map[string]any{
+					{
+						"message": map[string]any{
+							"role":    "assistant",
+							"content": respBodyJson["response"],
+						},
+						"index":         0,
+						"logprobs":      nil,
+						"finish_reason": "",
+					},
+				},
+			}
+
+			newChunkBody, err := json.Marshal(defaultResp)
+			if err != nil {
+				logger.Error("Failed to marshal response chunk for Cloudflare AI", zap.Error(err))
+				continue
+			}
+
+			transformedChunks = append(transformedChunks, "data: "+string(newChunkBody))
+		}
+
+		newRespBodyString := strings.Join(transformedChunks, "\n\n")
+		resp.Body = io.NopCloser(strings.NewReader(newRespBodyString))
+	} else {
+		// Handle single JSON response
+		var respBodyJson map[string]any
+		if err := json.Unmarshal(respBody, &respBodyJson); err != nil {
+			logger.Error("Failed to decode response body for Cloudflare AI", zap.Error(err))
+			return err
+		}
+
+		// Map Cloudflare's response format to the default format
+		defaultResp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": respBodyJson["result"].(map[string]interface{})["response"],
+					},
+					"index":         0,
+					"logprobs":      nil,
+					"finish_reason": "",
+				},
+			},
+		}
+
+		newRespBody, err := json.Marshal(defaultResp)
+		if err != nil {
+			logger.Error("Failed to marshal response body for Cloudflare AI", zap.Error(err))
+			return err
+		}
+
+		resp.Body = io.NopCloser(strings.NewReader(string(newRespBody)))
+	}
+
 	return nil
 }
 
