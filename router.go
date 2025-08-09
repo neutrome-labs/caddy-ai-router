@@ -419,6 +419,15 @@ func (h *ModelsEndpointHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return nil
 	}
 
+	// Fire a pageview event for observability (without query string)
+	urlWithoutQs := r.URL.String()
+	if r.URL.RawQuery != "" {
+		urlWithoutQs = urlWithoutQs[:len(urlWithoutQs)-len(r.URL.RawQuery)-1]
+	}
+	common.FireObservabilityEvent("system", urlWithoutQs, "$pageview", map[string]any{
+		"$ip": r.RemoteAddr,
+	})
+
 	// Discover API key provider from context if present
 	var apiKeyService auth.ExternalAPIKeyProvider
 	if val := r.Context().Value(ExternalAPIKeyProviderContextKeyString); val != nil {
@@ -479,6 +488,15 @@ func (h *ChatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		http.Error(w, fmt.Sprintf("ai_chat_completions: router '%s' not found", h.Router), http.StatusInternalServerError)
 		return nil
 	}
+
+	// Fire a pageview event for observability (without query string)
+	urlWithoutQs := r.URL.String()
+	if r.URL.RawQuery != "" {
+		urlWithoutQs = urlWithoutQs[:len(urlWithoutQs)-len(r.URL.RawQuery)-1]
+	}
+	common.FireObservabilityEvent("system", urlWithoutQs, "$pageview", map[string]any{
+		"$ip": r.RemoteAddr,
+	})
 
 	var apiKeyService auth.ExternalAPIKeyProvider
 	if val := r.Context().Value(ExternalAPIKeyProviderContextKeyString); val != nil {
