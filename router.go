@@ -30,11 +30,18 @@ const (
 )
 
 func init() {
-	caddy.RegisterModule(AICoreRouter{})
-	httpcaddyfile.RegisterHandlerDirective("ai_core_router", parseAICoreRouterCaddyfile)
+	caddy.RegisterModule(&AICoreRouter{})
+	httpcaddyfile.RegisterHandlerDirective("ai_router", parseAIRouterCaddyfile)
+	// New decoupled endpoint handlers
+	caddy.RegisterModule(ModelsEndpointHandler{})
+	caddy.RegisterModule(ChatCompletionsHandler{})
+	httpcaddyfile.RegisterHandlerDirective("ai_models", parseModelsHandlerCaddyfile)
+	httpcaddyfile.RegisterHandlerDirective("ai_chat_completions", parseChatHandlerCaddyfile)
 }
 
 type AICoreRouter struct {
+	// Optional name to reference this router from other handlers (defaults to "default")
+	Name                    string                     `json:"name,omitempty"`
 	Providers               map[string]*ProviderConfig `json:"providers,omitempty"`
 	DefaultProviderForModel map[string][]string        `json:"default_provider_for_model,omitempty"`
 	ProviderOrder           []string                   `json:"provider_order,omitempty"`
@@ -55,9 +62,9 @@ type ProviderConfig struct {
 	parsedURL  *url.URL
 }
 
-func (AICoreRouter) CaddyModule() caddy.ModuleInfo {
+func (*AICoreRouter) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
-		ID:  "http.handlers.ai_core_router",
+		ID:  "http.handlers.ai_router",
 		New: func() caddy.Module { return new(AICoreRouter) },
 	}
 }
@@ -68,6 +75,10 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 	cr.knownModelsCache = &sync.Map{}
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
+
+	if strings.TrimSpace(cr.Name) == "" {
+		cr.Name = "default"
+	}
 
 	if common.TryInstrumentAppObservability() {
 		cr.logger.Info("PostHog observability instrumentation enabled")
@@ -127,6 +138,9 @@ func (cr *AICoreRouter) Provision(ctx caddy.Context) error {
 		zap.Int("num_model_defaults", len(cr.DefaultProviderForModel)),
 	)
 
+	// Make this router discoverable by endpoint handlers
+	registerRouter(cr.Name, cr)
+
 	common.FireObservabilityEvent("system", "", "router_start", map[string]any{
 		"version":            APP_VERSION,
 		"num_providers":      len(cr.Providers),
@@ -147,51 +161,9 @@ func (cr *AICoreRouter) Validate() error {
 }
 
 func (cr *AICoreRouter) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	// This logic will be simplified as the handlers will be moved into this package.
-	// For now, we'll keep the existing logic.
-	cr.logger.Debug("ServeHTTP invoked in ai_core_router",
-		zap.String("method", r.Method),
-		zap.String("host", r.Host),
-		zap.String("uri", r.RequestURI),
-		zap.String("path", r.URL.Path),
-	)
-
-	reqCtx := r.Context()
-
-	var apiKeyService auth.ExternalAPIKeyProvider
-	apiKeyServiceVal := reqCtx.Value("ai_external_api_key_provider")
-	if apiKeyServiceVal != nil {
-		var ok bool
-		apiKeyService, ok = apiKeyServiceVal.(auth.ExternalAPIKeyProvider)
-		if !ok {
-			cr.logger.Warn("Value found for ExternalAPIKeyProviderContextKeyString but type assertion to ExternalAPIKeyProvider failed.")
-		}
-	}
-
-	if apiKeyService == nil {
-		apiKeyService = auth.NewDefaultEnvAPIKeyProvider(cr.logger)
-	}
-
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	urlWithoutQs := scheme + "://" + r.Host + "/<prefix>" + r.URL.Path
-	defer func() {
-		common.FireObservabilityEvent("system", urlWithoutQs, "$pageview", map[string]any{
-			"$ip": r.RemoteAddr,
-		})
-	}()
-
-	if r.Method == http.MethodGet && r.URL.Path == "/models" {
-		return cr.handleGetManagedModels(w, r.WithContext(reqCtx), next, apiKeyService)
-	}
-
-	if r.Method == http.MethodPost && r.URL.Path == "/chat/completions" {
-		return cr.handlePostInferenceRequest(w, r.WithContext(reqCtx), next, apiKeyService)
-	}
-
-	return next.ServeHTTP(w, r.WithContext(reqCtx))
+	// No-op handler; exists only to provision router config at top-level.
+	// Always pass through.
+	return next.ServeHTTP(w, r)
 }
 
 func (cr *AICoreRouter) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
@@ -209,10 +181,15 @@ func (cr *AICoreRouter) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	}
 
 	for d.Next() {
-		if d.Val() == "ai_core_router" && !d.NextArg() {
+		if d.Val() == "ai_router" && !d.NextArg() {
 		}
 		for d.NextBlock(0) {
 			switch d.Val() {
+			case "name":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				cr.Name = strings.ToLower(strings.TrimSpace(d.Val()))
 			case "provider":
 				if !d.NextArg() {
 					return d.ArgErr()
@@ -380,7 +357,7 @@ func (cr *AICoreRouter) getErrorHandler(p *ProviderConfig) func(rw http.Response
 	}
 }
 
-func parseAICoreRouterCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+func parseAIRouterCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
 	var cr AICoreRouter
 	err := cr.UnmarshalCaddyfile(h.Dispenser)
 	if err != nil {
@@ -394,4 +371,152 @@ var (
 	_ caddy.Validator             = (*AICoreRouter)(nil)
 	_ caddyhttp.MiddlewareHandler = (*AICoreRouter)(nil)
 	_ caddyfile.Unmarshaler       = (*AICoreRouter)(nil)
+)
+
+// --- Shared registry and decoupled endpoint handlers ---
+
+// simple in-process registry mapping router names to instances
+var routerRegistry sync.Map // map[string]*AICoreRouter
+
+func registerRouter(name string, r *AICoreRouter) {
+	routerRegistry.Store(strings.ToLower(name), r)
+}
+
+func getRouter(name string) (*AICoreRouter, bool) {
+	if strings.TrimSpace(name) == "" {
+		name = "default"
+	}
+	if v, ok := routerRegistry.Load(strings.ToLower(name)); ok {
+		if cr, ok2 := v.(*AICoreRouter); ok2 {
+			return cr, true
+		}
+	}
+	return nil, false
+}
+
+// ModelsEndpointHandler serves aggregated models under any path.
+type ModelsEndpointHandler struct {
+	Router string `json:"router,omitempty"`
+	logger *zap.Logger
+}
+
+func (ModelsEndpointHandler) CaddyModule() caddy.ModuleInfo {
+	return caddy.ModuleInfo{
+		ID:  "http.handlers.ai_models",
+		New: func() caddy.Module { return new(ModelsEndpointHandler) },
+	}
+}
+
+func (h *ModelsEndpointHandler) Provision(ctx caddy.Context) error {
+	h.logger = ctx.Logger(h)
+	return nil
+}
+
+func (h *ModelsEndpointHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	cr, ok := getRouter(h.Router)
+	if !ok {
+		http.Error(w, fmt.Sprintf("ai_models: router '%s' not found", h.Router), http.StatusInternalServerError)
+		return nil
+	}
+
+	// Discover API key provider from context if present
+	var apiKeyService auth.ExternalAPIKeyProvider
+	if val := r.Context().Value(ExternalAPIKeyProviderContextKeyString); val != nil {
+		if svc, ok := val.(auth.ExternalAPIKeyProvider); ok {
+			apiKeyService = svc
+		}
+	}
+	if apiKeyService == nil {
+		apiKeyService = auth.NewDefaultEnvAPIKeyProvider(cr.logger)
+	}
+
+	if r.Method == http.MethodGet {
+		return cr.handleGetManagedModels(w, r, next, apiKeyService)
+	}
+	// Not our method; pass through
+	return next.ServeHTTP(w, r)
+}
+
+func parseModelsHandlerCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+	var mh ModelsEndpointHandler
+	for h.Next() {
+		for h.NextBlock(0) {
+			switch h.Val() {
+			case "router":
+				if !h.NextArg() {
+					return nil, h.ArgErr()
+				}
+				mh.Router = h.Val()
+			default:
+				return nil, h.Errf("unrecognized ai_models option '%s'", h.Val())
+			}
+		}
+	}
+	return &mh, nil
+}
+
+// ChatCompletionsHandler serves chat completions under any path.
+type ChatCompletionsHandler struct {
+	Router string `json:"router,omitempty"`
+	logger *zap.Logger
+}
+
+func (ChatCompletionsHandler) CaddyModule() caddy.ModuleInfo {
+	return caddy.ModuleInfo{
+		ID:  "http.handlers.ai_chat_completions",
+		New: func() caddy.Module { return new(ChatCompletionsHandler) },
+	}
+}
+
+func (h *ChatCompletionsHandler) Provision(ctx caddy.Context) error {
+	h.logger = ctx.Logger(h)
+	return nil
+}
+
+func (h *ChatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	cr, ok := getRouter(h.Router)
+	if !ok {
+		http.Error(w, fmt.Sprintf("ai_chat_completions: router '%s' not found", h.Router), http.StatusInternalServerError)
+		return nil
+	}
+
+	var apiKeyService auth.ExternalAPIKeyProvider
+	if val := r.Context().Value(ExternalAPIKeyProviderContextKeyString); val != nil {
+		if svc, ok := val.(auth.ExternalAPIKeyProvider); ok {
+			apiKeyService = svc
+		}
+	}
+	if apiKeyService == nil {
+		apiKeyService = auth.NewDefaultEnvAPIKeyProvider(cr.logger)
+	}
+
+	if r.Method == http.MethodPost {
+		return cr.handlePostInferenceRequest(w, r, next, apiKeyService)
+	}
+	return next.ServeHTTP(w, r)
+}
+
+func parseChatHandlerCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+	var ch ChatCompletionsHandler
+	for h.Next() {
+		for h.NextBlock(0) {
+			switch h.Val() {
+			case "router":
+				if !h.NextArg() {
+					return nil, h.ArgErr()
+				}
+				ch.Router = h.Val()
+			default:
+				return nil, h.Errf("unrecognized ai_chat_completions option '%s'", h.Val())
+			}
+		}
+	}
+	return &ch, nil
+}
+
+var (
+	_ caddy.Provisioner           = (*ModelsEndpointHandler)(nil)
+	_ caddyhttp.MiddlewareHandler = (*ModelsEndpointHandler)(nil)
+	_ caddy.Provisioner           = (*ChatCompletionsHandler)(nil)
+	_ caddyhttp.MiddlewareHandler = (*ChatCompletionsHandler)(nil)
 )

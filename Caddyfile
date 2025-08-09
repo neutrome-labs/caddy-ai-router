@@ -1,45 +1,69 @@
+{
+    order ai_router first
+}
+
 http://localhost:8080 {
     log {
         output stdout
         level DEBUG
     }
 
-    handle_path /api/* {
+    # Provision the AI router at top level (decoupled from endpoints)
+    ai_router {
+        name default
+
+        # Define known providers and their API base URLs
+        provider openrouter {
+            api_base_url "https://openrouter.ai/api/v1"
+        }
+
+        provider google {
+            api_base_url "https://generativelanguage.googleapis.com/v1beta"
+            style "google" # Specify the style for Google provider
+        }
+        
+        provider anthropic {
+            api_base_url "https://api.anthropic.com/v1"
+            style "anthropic"
+        }
+
+        provider cf {
+            api_base_url "https://api.cloudflare.com/client/v4/accounts/075489db87322d0618157d8c9122859a/ai"
+            style "cloudflare"
+        }
+
+        # Define default providers for specific models
+        default_provider_for_model "gemini-pro" "google"
+        default_provider_for_model "claude-3-opus-20240229" "anthropic" "openrouter"
+    }
+
+    # Decoupled endpoints using dedicated handlers
+    handle_path /api/models {
         route {
-            # CORS Headers to allow all origins, methods, and common headers
+            # CORS
             header Access-Control-Allow-Origin "*"
             header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
             header Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With, X-CSRF-Token, *"
-            
-            # Handle OPTIONS preflight requests
             @options method OPTIONS
             respond @options 204
 
-            # AI Core Router: Handles routing to AI providers
-            ai_core_router {
-                # Define known providers and their API base URLs
-                provider openrouter {
-                    api_base_url "https://openrouter.ai/api/v1"
-                }
+            ai_models {
+                router default
+            }
+        }
+    }
 
-                provider google {
-                    api_base_url "https://generativelanguage.googleapis.com/v1beta"
-                    style "google" # Specify the style for Google provider
-                }
-                
-                provider anthropic {
-                    api_base_url "https://api.anthropic.com/v1"
-                    style "anthropic"
-                }
+    handle_path /api/chat/completions {
+        route {
+            # CORS
+            header Access-Control-Allow-Origin "*"
+            header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+            header Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With, X-CSRF-Token, *"
+            @options method OPTIONS
+            respond @options 204
 
-                provider cf {
-                    api_base_url "https://api.cloudflare.com/client/v4/accounts/075489db87322d0618157d8c9122859a/ai"
-                    style "cloudflare"
-                }
-
-                # Define default providers for specific models
-                default_provider_for_model "gemini-pro" "google"
-                default_provider_for_model "claude-3-opus-20240229" "anthropic" "openrouter"
+            ai_chat_completions {
+                router default
             }
         }
     }
