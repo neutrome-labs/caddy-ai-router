@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const APP_VERSION = "0.2.0"
+const APP_VERSION = "0.3.0"
 
 const (
 	UserIDContextKeyString                 string = "ai_user_id"
