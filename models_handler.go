@@ -168,5 +168,5 @@ func (cr *AICoreRouter) handleGetManagedModels(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(AggregatedModelsResponse{Data: allModels})
 
-	return nil
+	return next.ServeHTTP(w, r) // Call next handler in chain if any
 }

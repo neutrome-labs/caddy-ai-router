@@ -221,5 +221,5 @@ func (cr *AICoreRouter) handlePostInferenceRequest(w http.ResponseWriter, r *htt
 
 	providerConfig.proxy.ServeHTTP(w, r)
 
-	return nil
+	return next.ServeHTTP(w, r) // Call next handler in chain if any
 }
