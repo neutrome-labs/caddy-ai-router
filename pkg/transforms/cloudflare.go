@@ -32,5 +32,43 @@ func TransformRequestToCloudflareAI(r *http.Request, originalBody []byte, modelN
 
 // TransformResponseFromCloudflareAI is a no-op for the response body, as it's the unified format.
 func TransformResponseFromCloudflareAI(respBody []byte, logger *zap.Logger) ([]byte, error) {
-	return respBody, nil
+	var respBodyJson map[string]any
+	if err := json.Unmarshal(respBody, &respBodyJson); err != nil {
+		logger.Error("Failed to decode response body for Cloudflare AI", zap.Error(err))
+		return respBody, err
+	}
+
+	responseText, ok := respBodyJson["response"].(string)
+	if !ok {
+		_, ok := respBodyJson["result"].(map[string]interface{})
+		if ok {
+			responseText, ok = respBodyJson["result"].(map[string]interface{})["response"].(string)
+			if !ok {
+				return respBody, nil // If no response text, return original body
+			}
+		}
+	}
+
+	// Map Cloudflare's response format to the default format
+	defaultResp := map[string]any{
+		"choices": []map[string]any{
+			{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": responseText,
+				},
+				"index":         0,
+				"logprobs":      nil,
+				"finish_reason": "",
+			},
+		},
+	}
+
+	newRespBody, err := json.Marshal(defaultResp)
+	if err != nil {
+		logger.Error("Failed to marshal response body for Cloudflare AI", zap.Error(err))
+		return respBody, err
+	}
+
+	return newRespBody, nil
 }

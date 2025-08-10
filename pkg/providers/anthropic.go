@@ -41,14 +41,12 @@ func (p *AnthropicProvider) ModifyCompletionRequest(r *http.Request, modelName s
 }
 
 // ModifyCompletionResponse transforms the Anthropic's response to the unified format.
-func (p *AnthropicProvider) ModifyCompletionResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, logger *zap.Logger) error {
-	transformedBody, err := transforms.TransformResponseFromAnthropic(resp.Body, logger)
-	if err != nil {
-		return err
-	}
-	resp.Body = transformedBody
-	resp.Header.Del("Content-Length")
-	return nil
+func (p *AnthropicProvider) ModifyCompletionResponse(r *http.Request, resp *http.Response, logger *zap.Logger) error {
+	return common.HookHttpResponseBody(resp, func(resp *http.Response, body []byte) ([]byte, error) {
+		return common.HookHttpResponseJsonChunks(func(body []byte) ([]byte, error) {
+			return transforms.TransformResponseFromAnthropic(body, logger)
+		})(resp, body)
+	})
 }
 
 // FetchModels is a no-op for Anthropic as they don't have a models API.

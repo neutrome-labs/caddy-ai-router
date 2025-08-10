@@ -1,10 +1,8 @@
 package transforms
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -110,19 +108,12 @@ func TransformRequestToGoogleAI(r *http.Request, originalBody []byte, modelName 
 	return transformedBody, nil
 }
 
-func TransformResponseFromGoogleAI(respBody io.ReadCloser, logger *zap.Logger) (io.ReadCloser, error) {
-	bodyBytes, err := io.ReadAll(respBody)
-	if err != nil {
-		logger.Error("Failed to read google response body for transformation", zap.Error(err))
-		return nil, fmt.Errorf("reading original google response body: %w", err)
-	}
-	respBody.Close()
-
+func TransformResponseFromGoogleAI(respBody []byte, logger *zap.Logger) ([]byte, error) {
 	var googleResp GoogleAIGenerateContentResponse
-	if err := json.Unmarshal(bodyBytes, &googleResp); err != nil {
-		logger.Error("Failed to unmarshal google response", zap.Error(err), zap.ByteString("body", bodyBytes))
+	if err := json.Unmarshal(respBody, &googleResp); err != nil {
+		logger.Error("Failed to unmarshal google response", zap.Error(err), zap.ByteString("body", respBody))
 		// Return original body if unmarshalling fails
-		return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
+		return respBody, nil
 	}
 
 	unifiedResp := UnifiedChatResponse{
@@ -158,5 +149,5 @@ func TransformResponseFromGoogleAI(respBody io.ReadCloser, logger *zap.Logger) (
 		return nil, fmt.Errorf("marshaling unified response from google: %w", err)
 	}
 
-	return io.NopCloser(bytes.NewBuffer(transformedBytes)), nil
+	return transformedBytes, nil
 }

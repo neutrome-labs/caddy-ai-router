@@ -38,14 +38,12 @@ func (p *GoogleProvider) ModifyCompletionRequest(r *http.Request, modelName stri
 }
 
 // ModifyCompletionResponse transforms the Google AI's response to the unified format.
-func (p *GoogleProvider) ModifyCompletionResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, logger *zap.Logger) error {
-	transformedBody, err := transforms.TransformResponseFromGoogleAI(resp.Body, logger)
-	if err != nil {
-		return err
-	}
-	resp.Body = transformedBody
-	resp.Header.Del("Content-Length")
-	return nil
+func (p *GoogleProvider) ModifyCompletionResponse(r *http.Request, resp *http.Response, logger *zap.Logger) error {
+	return common.HookHttpResponseBody(resp, func(resp *http.Response, body []byte) ([]byte, error) {
+		return common.HookHttpResponseJsonChunks(func(body []byte) ([]byte, error) {
+			return transforms.TransformResponseFromGoogleAI(body, logger)
+		})(resp, body)
+	})
 }
 
 // FetchModels fetches the models from the Google AI API.

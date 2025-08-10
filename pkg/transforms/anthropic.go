@@ -1,10 +1,8 @@
 package transforms
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/neutrome-labs/caddy-ai-router/pkg/common"
@@ -104,18 +102,11 @@ func TransformRequestToAnthropic(r *http.Request, originalBody []byte, modelName
 	return transformedBody, nil
 }
 
-func TransformResponseFromAnthropic(respBody io.ReadCloser, logger *zap.Logger) (io.ReadCloser, error) {
-	bodyBytes, err := io.ReadAll(respBody)
-	if err != nil {
-		logger.Error("Failed to read anthropic response body for transformation", zap.Error(err))
-		return nil, fmt.Errorf("reading original anthropic response body: %w", err)
-	}
-	respBody.Close()
-
+func TransformResponseFromAnthropic(respBody []byte, logger *zap.Logger) ([]byte, error) {
 	var anthropicResp AnthropicMessagesResponse
-	if err := json.Unmarshal(bodyBytes, &anthropicResp); err != nil {
-		logger.Error("Failed to unmarshal anthropic response", zap.Error(err), zap.ByteString("body", bodyBytes))
-		return io.NopCloser(bytes.NewBuffer(bodyBytes)), nil
+	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
+		logger.Error("Failed to unmarshal anthropic response", zap.Error(err), zap.ByteString("body", respBody))
+		return respBody, nil
 	}
 
 	unifiedResp := UnifiedChatResponse{
@@ -148,5 +139,5 @@ func TransformResponseFromAnthropic(respBody io.ReadCloser, logger *zap.Logger) 
 		return nil, fmt.Errorf("marshaling unified response from anthropic: %w", err)
 	}
 
-	return io.NopCloser(bytes.NewBuffer(transformedBytes)), nil
+	return transformedBytes, nil
 }

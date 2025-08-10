@@ -308,7 +308,7 @@ func (cr *AICoreRouter) getModifyResponse(p *ProviderConfig) func(resp *http.Res
 					"api_key_id":   apiKeyID,
 				})
 			}
-			if err := p.Provider.ModifyCompletionResponse(nil, nil, resp, cr.logger); err != nil {
+			if err := p.Provider.ModifyCompletionResponse(resp.Request, resp, cr.logger); err != nil {
 				cr.logger.Error("failed to modify response", zap.Error(err), zap.String("provider", p.Name))
 			}
 		}

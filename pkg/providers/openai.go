@@ -37,7 +37,7 @@ func (p *OpenAIProvider) ModifyCompletionRequest(r *http.Request, modelName stri
 }
 
 // ModifyCompletionResponse is a no-op for OpenAI.
-func (p *OpenAIProvider) ModifyCompletionResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, logger *zap.Logger) error {
+func (p *OpenAIProvider) ModifyCompletionResponse(r *http.Request, resp *http.Response, logger *zap.Logger) error {
 	return nil
 }
 
