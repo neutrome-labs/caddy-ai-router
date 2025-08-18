@@ -26,4 +26,4 @@ jobs:
            go mod tidy
 
     - name: Build
-      run: /go/bin/xcaddy build --with github.com/neutrome-labs/caddy-ai-router=./
+      run: ~/go/bin/xcaddy build --with github.com/neutrome-labs/caddy-ai-router=./
