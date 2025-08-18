@@ -1,29 +1,77 @@
-# This workflow will build a golang project
+# This workflow will build a golang project and create releases
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
 name: Release
-
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]  # Trigger on version tags
   pull_request:
     branches: [ "main" ]
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-
+    
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
         go-version: '1.21'
-
-    - name: Deps
-      run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest |
-           go mod tidy
-
-    - name: Build
-      run: ~/go/bin/xcaddy build --with github.com/neutrome-labs/caddy-ai-router=./
+        
+    - name: Install dependencies
+      run: |
+        go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+        go mod tidy
+        
+    - name: Build for multiple platforms
+      run: |
+        # Create output directory
+        mkdir -p dist
+        
+        # Build for Linux AMD64
+        GOOS=linux GOARCH=amd64 ~/go/bin/xcaddy build --with github.com/neutrome-labs/caddy-ai-router=./
+        mv caddy dist/caddy-linux-amd64
+        
+        # Build for Linux ARM64
+        GOOS=linux GOARCH=arm64 ~/go/bin/xcaddy build --with github.com/neutrome-labs/caddy-ai-router=./
+        mv caddy dist/caddy-linux-arm64
+        
+        # Build for macOS AMD64
+        GOOS=darwin GOARCH=amd64 ~/go/bin/xcaddy build --with github.com/neutrome-labs/caddy-ai-router=./
+        mv caddy dist/caddy-darwin-amd64
+        
+        # Build for macOS ARM64 (Apple Silicon)
+        GOOS=darwin GOARCH=arm64 ~/go/bin/xcaddy build --with github.com/neutrome-labs/caddy-ai-router=./
+        mv caddy dist/caddy-darwin-arm64
+        
+        # Build for Windows AMD64
+        GOOS=windows GOARCH=amd64 ~/go/bin/xcaddy build --with github.com/neutrome-labs/caddy-ai-router=./
+        mv caddy.exe dist/caddy-windows-amd64.exe
+        
+        # Make binaries executable (except Windows)
+        chmod +x dist/caddy-*
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: caddy-binaries
+        path: dist/
+        
+    - name: Create Release and Upload Assets
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/*
+        generate_release_notes: true
+        body: |
+          ## Downloads
+          
+          Download the appropriate binary for your platform:
+          - **Linux AMD64**: `caddy-linux-amd64`
+          - **Linux ARM64**: `caddy-linux-arm64`  
+          - **macOS AMD64**: `caddy-darwin-amd64`
+          - **macOS ARM64**: `caddy-darwin-arm64`
+          - **Windows AMD64**: `caddy-windows-amd64.exe`
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
